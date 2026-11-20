@@ -11,6 +11,7 @@ On the page you can:
 - grab the pole and throw it, or shove the cart (`←` `→`), and watch it recover
 - switch the motor off to watch the pendulum swing freely, or drive the cart yourself
 - scrub back through training to see the same network when it was clueless
+- see the whole network wired up: every neuron and all 4,544 connections, with live signals, and hover to trace any neuron
 - change the pole length, the masses and the friction beyond what it was trained on
 - train a brand-new network from scratch in your browser and watch it learn
 

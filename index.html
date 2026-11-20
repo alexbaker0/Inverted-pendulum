@@ -124,7 +124,16 @@
   .note { font-size: 12px; line-height: 1.5; color: var(--ink-dim); margin: 8px 0 0; }
   .note b { color: var(--ink); font-weight: 600; }
   .ticks { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint); margin-top: 2px; }
-  #brainCanvas { display: block; width: 100%; height: 70px; margin-top: 10px; }
+  .wiring { background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 12px; padding: 12px 14px 12px; }
+  .wiring .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .wiring h2 { margin: 0; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-dim); }
+  .wiring .seg { width: 230px; }
+  .wiring .seg button { padding: 6px 4px; font-size: 10.5px; }
+  #wire { display: block; width: 100%; height: 440px; touch-action: pan-y; }
+  @media (max-width: 600px) { #wire { height: 380px; } }
+  .wiring .foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); margin-top: 6px; min-height: 16px; }
+  .wiring .foot b { color: var(--ink); font-weight: 500; }
+  .swatch { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin: 0 5px 0 0; border-radius: 2px; }
   #liveChart { display: block; width: 100%; height: 90px; margin-top: 10px; background: #080c14; border-radius: 6px; }
   .stats { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); line-height: 1.7; margin-top: 8px; }
   .stats span { color: var(--ink); }
@@ -167,6 +176,21 @@
       <div class="ro"><div class="k">Reward</div><div class="v" id="roR">–</div></div>
       <div class="ro"><div class="k">Upright for</div><div class="v" id="roUp">–</div></div>
     </div>
+
+    <div class="wiring">
+      <div class="head">
+        <h2>Brain wiring · <span id="wireTitle">6 → 64 → 64 → 1</span></h2>
+        <div class="seg" id="wireSeg" role="group" aria-label="Wiring view">
+          <button data-wire="live" class="on">Live signal</button>
+          <button data-wire="weights">Weights</button>
+        </div>
+      </div>
+      <canvas id="wire" aria-label="Diagram of the neural network's neurons and connections"></canvas>
+      <div class="foot">
+        <span id="wireInfo">Hover or tap a neuron to see its connections.</span>
+        <span><i class="swatch" style="background:var(--pole)"></i>positive <i class="swatch" style="background:var(--cart);margin-left:10px"></i>negative</span>
+      </div>
+    </div>
   </div>
 
   <aside class="panel">
@@ -187,8 +211,7 @@
         <input type="range" id="brainSlider" min="0" max="0" step="1" value="0" aria-label="Training checkpoint">
         <div class="ticks"><span>untrained</span><span id="brainMax">fully trained</span></div>
       </div>
-      <canvas id="brainCanvas" aria-label="Hidden neuron activity"></canvas>
-      <p class="note">Drag back to see the same network earlier in training. Above: its hidden neurons firing.</p>
+      <p class="note">Drag back to see the same network earlier in training. The wiring diagram under the chart shows whichever brain is selected here.</p>
     </div>
 
     <div class="group">
@@ -599,29 +622,198 @@ function drawTrace() {
   }
 }
 
-// hidden neuron activity
-const bc = $("brainCanvas"), bctx = bc.getContext("2d");
-function drawBrain() {
-  const r = bc.getBoundingClientRect();
-  if (bc.width !== Math.round(r.width * DPR)) { bc.width = Math.round(r.width * DPR); bc.height = Math.round(r.height * DPR); }
-  const w = r.width, h = r.height;
-  bctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  bctx.clearRect(0, 0, w, h);
-  if (!policy) return;
-  const acts = policy.activations();
-  const rows = [acts[0], acts[1]];
-  rows.forEach((a, ri) => {
-    const n = a.length, cols = Math.min(n, 32), rowsN = Math.ceil(n / cols);
-    const cell = Math.min((w) / cols, (h / 2 - 4) / rowsN);
-    for (let i = 0; i < n; i++) {
-      const v = mode === "ai" ? a[i] : 0;
-      const cx = (i % cols) * (w / cols) + (w / cols) / 2;
-      const cy = ri * (h / 2) + Math.floor(i / cols) * cell + cell / 2 + 2;
-      bctx.fillStyle = v >= 0 ? `rgba(244,179,80,${0.1 + 0.9 * v})` : `rgba(63,214,198,${0.1 - 0.9 * v})`;
-      bctx.beginPath(); bctx.arc(cx, cy, cell * 0.36, 0, Math.PI * 2); bctx.fill();
-    }
-  });
+// ---------------- brain wiring diagram ----------------
+// Every neuron and every connection of the selected network. Neurons are
+// coloured by their current output (amber +, teal -). Connections show either
+// the trained weight ("Weights") or what is flowing through them right now,
+// weight x the sending neuron's output ("Live signal").
+const wc = $("wire"), wctx = wc.getContext("2d");
+let wireMode = "live", wireNet = null, wireHover = null;
+document.querySelectorAll("#wireSeg button").forEach(b => b.onclick = () => {
+  wireMode = b.dataset.wire;
+  document.querySelectorAll("#wireSeg button").forEach(x => x.classList.toggle("on", x === b));
+});
+const IN_LABELS = [
+  ["cart position", "x", v => (v * P.RAIL_HALF).toFixed(2) + " m"],
+  ["cart speed", "ẋ", v => (v * 3).toFixed(2) + " m/s"],
+  ["cos angle", "cos θ", v => v.toFixed(2)],
+  ["sin angle", "sin θ", v => v.toFixed(2)],
+  ["spin", "θ̇", v => (v * 10 * 180 / Math.PI).toFixed(0) + "°/s"],
+  ["last push", "u", v => (v * P.MAX_FORCE).toFixed(1) + " N"],
+];
+const dispObs = new Float32Array(P.OBS_DIM);
+
+// Order the hidden neurons by how they push the output: neurons that push the
+// cart right end up at the top, those that push left at the bottom. This
+// untangles the picture without changing what the network computes.
+function buildWireNet(pol) {
+  const L = pol.layers;               // [in->h1, h1->h2, h2->out]
+  const h1 = L[0].out, h2 = L[1].out;
+  const outW = j => L[2].W[j];        // h2 j -> output
+  const ord2 = [...Array(h2).keys()].sort((a, b) => outW(b) - outW(a));
+  const eff1 = i => { let e = 0; for (let j = 0; j < h2; j++) e += L[1].W[j * h1 + i] * outW(j); return e; };
+  const e1 = [...Array(h1).keys()].map(eff1);
+  const ord1 = [...Array(h1).keys()].sort((a, b) => e1[b] - e1[a]);
+  const pos1 = new Int32Array(h1), pos2 = new Int32Array(h2);
+  ord1.forEach((n, k) => pos1[n] = k); ord2.forEach((n, k) => pos2[n] = k);
+  const maxAbs = L.map(l => { let m = 1e-6; for (const w of l.W) m = Math.max(m, Math.abs(w)); return m; });
+  return { pol, L, sizes: [L[0].inp, h1, h2, 1], pos: [null, pos1, pos2, null], maxAbs, eff1: e1 };
 }
+
+function wireLayout(w, h) {
+  const narrow = w < 520;
+  const left = narrow ? 64 : 150, right = narrow ? 58 : 110;
+  const xs = [left, left + (w - left - right) * 0.36, left + (w - left - right) * 0.72, w - right];
+  const top = 14, bot = h - 14;
+  const y = (layer, k, n) => n === 1 ? (top + bot) / 2 :
+    layer === 0 ? top + 40 + k * (bot - top - 80) / (n - 1) : top + k * (bot - top) / (n - 1);
+  return { narrow, xs, y };
+}
+
+function nodeXY(net, lay, layer, idx) {
+  const n = net.sizes[layer];
+  const k = net.pos[layer] ? net.pos[layer][idx] : idx;
+  return [lay.xs[layer], lay.y(layer, k, n)];
+}
+
+function drawWire() {
+  const r = wc.getBoundingClientRect();
+  if (wc.width !== Math.round(r.width * DPR) || wc.height !== Math.round(r.height * DPR)) {
+    wc.width = Math.round(r.width * DPR); wc.height = Math.round(r.height * DPR);
+  }
+  const w = r.width, h = r.height;
+  wctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  wctx.clearRect(0, 0, w, h);
+  if (!policy) return;
+  if (!wireNet || wireNet.pol !== policy) wireNet = buildWireNet(policy);
+  const net = wireNet, L = net.L, lay = wireLayout(w, h);
+  $("wireTitle").textContent = net.sizes.join(" → ") + " · " + (L.reduce((a, l) => a + l.W.length + l.b.length, 0)).toLocaleString() + " numbers";
+
+  // Run the network on the current state for display (even when it isn't driving).
+  PD.observe(s, lastU, dispObs);
+  policy.act(dispObs);
+  const acts = [dispObs, ...policy.activations()];
+
+  // Edges, batched into alpha buckets per colour so thousands of lines stay fast.
+  const BUCKETS = 10;
+  const paths = [[], []].map(() => Array.from({ length: BUCKETS }, () => []));
+  const hov = wireHover;
+  for (let li = 0; li < 3; li++) {
+    const l = L[li], src = acts[li];
+    let norm = net.maxAbs[li];
+    if (wireMode === "live") { // normalise by the biggest signal in this layer right now
+      norm = 1e-6;
+      for (let o = 0; o < l.out; o++) for (let i = 0; i < l.inp; i++) norm = Math.max(norm, Math.abs(l.W[o * l.inp + i] * src[i]));
+    }
+    for (let o = 0; o < l.out; o++) {
+      for (let i = 0; i < l.inp; i++) {
+        const wt = l.W[o * l.inp + i];
+        const val = wireMode === "live" ? wt * src[i] : wt;
+        let a = Math.pow(Math.abs(val) / norm, 0.8);
+        if (hov) {
+          const touches = (hov.layer === li && hov.idx === i) || (hov.layer === li + 1 && hov.idx === o);
+          a = touches ? Math.max(a, 0.12) : a * 0.08;
+        }
+        // the 64x64 middle layer has 4,096 links: show only its stronger ones
+        if (a < (li === 1 && !hov ? (wireMode === "live" ? 0.14 : 0.3) : 0.04)) continue;
+        const b = Math.min(BUCKETS - 1, Math.floor(a * BUCKETS));
+        paths[val >= 0 ? 0 : 1][b].push(li, i, o);
+      }
+    }
+  }
+  wctx.lineCap = "round";
+  for (let b = 0; b < BUCKETS; b++) {      // weakest first, so strong links sit on top
+    for (let c = 0; c < 2; c++) {
+      const rgb = c === 0 ? "244,179,80" : "63,214,198";
+      const list = paths[c][b];
+      if (!list.length) continue;
+      const a = (b + 0.5) / BUCKETS;
+      wctx.strokeStyle = `rgba(${rgb},${0.04 + 0.75 * a * a})`;
+      wctx.lineWidth = 0.5 + 1.8 * a;
+      wctx.beginPath();
+      for (let k = 0; k < list.length; k += 3) {
+        const [x1, y1] = nodeXY(net, lay, list[k], list[k + 1]);
+        const [x2, y2] = nodeXY(net, lay, list[k] + 1, list[k + 2]);
+        wctx.moveTo(x1, y1); wctx.lineTo(x2, y2);
+      }
+      wctx.stroke();
+    }
+  }
+
+  // Nodes
+  const fillFor = v => v >= 0 ? `rgba(244,179,80,${0.15 + 0.85 * Math.min(1, v)})` : `rgba(63,214,198,${0.15 + 0.85 * Math.min(1, -v)})`;
+  wctx.font = `${lay.narrow ? 10 : 11}px ${css("--mono")}`;
+  for (let layer = 0; layer < 4; layer++) {
+    const n = net.sizes[layer];
+    const big = layer === 0 || layer === 3;
+    const rad = big ? 7 : Math.max(2.2, Math.min(5, (h - 28) / n * 0.38));
+    for (let idx = 0; idx < n; idx++) {
+      const [x, y] = nodeXY(net, lay, layer, idx);
+      const v = acts[layer][idx];
+      wctx.fillStyle = fillFor(layer === 0 ? Math.max(-1, Math.min(1, v)) : v);
+      wctx.strokeStyle = hov && hov.layer === layer && hov.idx === idx ? C.ink : "#0c111b";
+      wctx.lineWidth = hov && hov.layer === layer && hov.idx === idx ? 2 : 1;
+      wctx.beginPath(); wctx.arc(x, y, rad, 0, Math.PI * 2); wctx.fill(); wctx.stroke();
+      if (layer === 0) {
+        const [long, short, fmt] = IN_LABELS[idx];
+        wctx.textAlign = "right"; wctx.fillStyle = C.dim;
+        if (lay.narrow) wctx.fillText(short, x - 12, y + 4);
+        else {
+          wctx.fillText(long, x - 14, y - 2);
+          wctx.fillStyle = C.ink; wctx.fillText(fmt(acts[0][idx]), x - 14, y + 12);
+        }
+      }
+      if (layer === 3) {
+        wctx.textAlign = "left"; wctx.fillStyle = C.dim;
+        wctx.fillText("force", x + 13, y - 3);
+        wctx.fillStyle = C.ink; wctx.fillText((v * P.MAX_FORCE).toFixed(1) + " N", x + 13, y + 12);
+        if (mode !== "ai") { wctx.fillStyle = C.faint; wctx.fillText("(not driving)", x + 13, y + 26); }
+      }
+    }
+  }
+  // column captions
+  wctx.textAlign = "center"; wctx.fillStyle = C.faint;
+  if (!lay.narrow) {
+    wctx.fillText("hidden 1", lay.xs[1], h - 1);
+    wctx.fillText("hidden 2", lay.xs[2], h - 1);
+  }
+
+  if (hov) describeHover(net, acts);
+}
+
+function describeHover(net, acts) {
+  const { layer, idx } = wireHover;
+  let txt;
+  if (layer === 0) txt = `<b>Input · ${IN_LABELS[idx][0]}</b> = ${IN_LABELS[idx][2](acts[0][idx])} (fed in as ${acts[0][idx].toFixed(2)})`;
+  else if (layer === 3) txt = `<b>Output</b> ${acts[3][0].toFixed(2)} × 15 N = ${(acts[3][0] * P.MAX_FORCE).toFixed(1)} N`;
+  else {
+    const out = acts[layer][idx];
+    const toOut = layer === 2 ? net.L[2].W[idx] : net.eff1[idx];
+    txt = `<b>Hidden ${layer} · neuron ${idx + 1}</b> output ${out >= 0 ? "+" : ""}${out.toFixed(2)} · when it fires, it pushes the cart ${toOut >= 0 ? "right" : "left"}` +
+          (layer === 2 ? ` (weight to output ${toOut.toFixed(2)})` : "");
+  }
+  $("wireInfo").innerHTML = txt;
+}
+
+function wireHit(e) {
+  if (!wireNet) return null;
+  const r = wc.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const lay = wireLayout(r.width, r.height);
+  let best = null, bd = 14;
+  for (let layer = 0; layer < 4; layer++) {
+    if (Math.abs(mx - lay.xs[layer]) > 16) continue;
+    for (let idx = 0; idx < wireNet.sizes[layer]; idx++) {
+      const [x, y] = nodeXY(wireNet, lay, layer, idx);
+      const d = Math.hypot(mx - x, my - y);
+      if (d < bd) { bd = d; best = { layer, idx }; }
+    }
+  }
+  return best;
+}
+wc.addEventListener("pointermove", e => { wireHover = wireHit(e); if (!wireHover) $("wireInfo").textContent = "Hover or tap a neuron to see its connections."; });
+wc.addEventListener("pointerdown", e => { wireHover = wireHit(e); if (!wireHover) $("wireInfo").textContent = "Hover or tap a neuron to see its connections."; });
+wc.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") { wireHover = null; $("wireInfo").textContent = "Hover or tap a neuron to see its connections."; } });
 
 function setStatus() {
   let txt, col;
@@ -660,7 +852,7 @@ function frame(now) {
   if (n === 20) acc = 0;
   draw();
   drawTrace();
-  if ((frameN++ & 1) === 0) { drawBrain(); readouts(); setStatus(); }
+  if ((frameN++ & 1) === 0) { drawWire(); readouts(); setStatus(); }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
