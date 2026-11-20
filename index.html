@@ -92,6 +92,7 @@
   .ro { background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 10px; padding: 9px 11px; }
   .ro .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); }
   .ro .v { font-family: var(--mono); font-size: 17px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  body[data-sys=double] .ro .v { font-size: 14px; white-space: nowrap; }
 
   .panel {
     background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 12px;
@@ -121,6 +122,9 @@
   .control .row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--ink-dim); margin-bottom: 6px; }
   .control .row span:last-child { color: var(--ink); font-variant-numeric: tabular-nums; }
   input[type=range] { width: 100%; accent-color: var(--accent); }
+  .only-double { display: none; }
+  #trainGroup.disabled .only-double { display: block; margin: 0 0 8px; }
+  #trainGroup.disabled > :not(h2):not(.only-double) { opacity: 0.35; pointer-events: none; }
   .note { font-size: 12px; line-height: 1.5; color: var(--ink-dim); margin: 8px 0 0; }
   .note b { color: var(--ink); font-weight: 600; }
   .ticks { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint); margin-top: 2px; }
@@ -147,7 +151,7 @@
 <div class="frame">
   <header class="title">
     <h1>Inverted <span>Pendulum</span></h1>
-    <div class="sub">PPO agent · 15 N motor · 4.8 m rail · 50 Hz control · <a href="https://github.com/alexbaker0/Inverted-pendulum">source</a></div>
+    <div class="sub" id="subLine">PPO agent · 15 N motor · 4.8 m rail · 50 Hz control · <a href="https://github.com/alexbaker0/Inverted-pendulum">source</a></div>
   </header>
 
   <div class="main">
@@ -160,9 +164,9 @@
 
     <div class="chart">
       <div class="legend">
-        <span><i style="background:var(--pole)"></i>Pole angle (±180°)</span>
+        <span><i style="background:var(--pole)"></i><span id="legTh">Pole angle (±180°)</span></span>
         <span><i style="background:var(--cart)"></i>Cart position (±2.4 m)</span>
-        <span><i style="background:var(--force)"></i>Motor force (±15 N)</span>
+        <span><i style="background:var(--force)"></i><span id="legF">Motor force (±15 N)</span></span>
         <span style="margin-left:auto;color:var(--ink-faint)">last 10 s</span>
       </div>
       <canvas id="trace"></canvas>
@@ -194,6 +198,15 @@
   </div>
 
   <aside class="panel">
+    <div class="group">
+      <h2>Pendulum</h2>
+      <div class="seg" id="sysSeg" role="group" aria-label="Pendulum type">
+        <button data-sys="single" class="on">Single</button>
+        <button data-sys="double">Double</button>
+      </div>
+      <p class="note" id="sysNote"></p>
+    </div>
+
     <div class="group">
       <h2>Who drives the cart</h2>
       <div class="seg" id="modeSeg" role="group" aria-label="Controller">
@@ -239,11 +252,11 @@
     <div class="group">
       <h2>The world</h2>
       <div class="control">
-        <div class="row"><span>Pole length</span><span id="vLen">1.00 m</span></div>
+        <div class="row"><span id="lenLabel">Pole length</span><span id="vLen">1.00 m</span></div>
         <input type="range" id="sLen" min="0.5" max="1.6" step="0.05" value="1.0">
       </div>
       <div class="control">
-        <div class="row"><span>Pole mass</span><span id="vMass">0.20 kg</span></div>
+        <div class="row"><span id="massLabel">Pole mass</span><span id="vMass">0.20 kg</span></div>
         <input type="range" id="sMass" min="0.05" max="0.6" step="0.01" value="0.2">
       </div>
       <div class="control">
@@ -255,11 +268,12 @@
         <input type="range" id="sFric" min="0" max="3" step="0.05" value="0.5">
       </div>
       <button class="btn" id="bDefaults" style="width:100%">Reset to defaults</button>
-      <p class="note">Training varied pole length ±15%, pole mass ±30%, cart mass ±20% and friction ×½ to ×2. Push beyond that and see where the AI breaks.</p>
+      <p class="note" id="worldNote">Training varied pole length ±15%, pole mass ±30%, cart mass ±20% and friction ×½ to ×2. Push beyond that and see where the AI breaks.</p>
     </div>
 
-    <div class="group">
+    <div class="group" id="trainGroup">
       <h2>Train a new brain here</h2>
+      <p class="note only-double">Live training is for the single pendulum only. The double needs far more practice than a browser can give it.</p>
       <div class="btns">
         <button class="btn primary" id="bTrain">Start training</button>
         <button class="btn" id="bTrainReset">New random brain</button>
@@ -278,6 +292,7 @@
       <p><b>The agent</b> sees six numbers: cart position and speed, the pole angle (as sine and cosine), its spin, and the force it applied last time. It outputs one number, the motor force. That is a 6→64→64→1 network with tanh units.</p>
       <p><b>The reward</b>, each 1/50 s, is between 0 and 1. It is 1 only when the pole is upright, the cart is in the middle of the rail, nothing is moving and the motor is idle. Hitting an end stop costs 20 and ends the episode.</p>
       <p><b>Training</b> used PPO for 36 million steps, about 8 simulated days, starting from random angles, spins and positions. The physics was jittered and the cart was shoved at random, so the agent copes with a world it has not seen.</p>
+      <p><b>The double pendulum</b> has two 0.6 m rods hinged end to end, with friction at both joints and a 25 N motor. Its equations come from the Lagrangian of the cart and both rods. With one motor and two joints it is chaotic and underactuated. The agent sees nine numbers: both angles as sine and cosine, both spins, plus the cart and its last push. It uses a bigger 9→128→128→1 network, trained the same way for 150 million steps (about 35 simulated days). Swing-up only clicked after about 39 million steps.</p>
     </details>
   </aside>
 </div>
@@ -285,32 +300,48 @@
 <script src="physics.js"></script>
 <script>
 "use strict";
-const PD = window.Pendulum, P = PD.P;
+let PD = window.Pendulum, P = PD.P;
 const $ = id => document.getElementById(id);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const C = { pole: css("--pole"), cart: css("--cart"), force: css("--force"), ink: css("--ink"),
             dim: css("--ink-dim"), faint: css("--ink-faint"), grid: css("--grid"),
             edge: css("--panel-edge"), good: css("--good"), danger: css("--danger") };
 
-// ---------------- state ----------------
-const params = PD.nominalParams();
-const s = new Float64Array(4);           // x, xd, th, thd
+// ---------------- systems ----------------
+// Two worlds share this page. Each has its own state layout, physics,
+// parameters and trained brains; everything below goes through SYS[sysName].
+const SYS = {
+  single: { PD: window.Pendulum, s: new Float64Array(4), params: window.Pendulum.nominalParams(),
+            I: { x: 0, xd: 1, th: [2], td: [3] }, file: "weights.json", snapshots: null,
+            links: p => [p.l * 2], defaults: { sLen: 1.0, sMass: 0.2, sCart: 1.0, sFric: 0.5 } },
+  double: { PD: window.PendulumDouble, s: new Float64Array(6), params: window.PendulumDouble.nominalParams(),
+            I: { x: 0, xd: 3, th: [1, 2], td: [4, 5] }, file: "weights_double.json", snapshots: null,
+            links: p => [p.L1, p.L2], defaults: { sLen: 1.2, sMass: 0.2, sCart: 1.0, sFric: 0.5 } },
+};
+let sysName = "single", sys = SYS.single, s = sys.s, params = sys.params, I = sys.I;
+const makePolicy = window.Pendulum.makePolicy;
+function th(k) { return s[I.th[k]]; }
+function worstAngle() { return Math.max(...I.th.map(i => Math.abs(s[i]))); }
+
 let lastU = 0, force = 0, aiForce = 0, rewardNow = 0, simTime = 0, uprightSince = null;
 let mode = "ai", speed = 1, policy = null, snapshots = [], brainIdx = 0, liveBrain = null;
 let keyL = false, keyR = false, shove = 0, shoveLeft = 0, bumpFlash = 0;
 let drag = null;   // {lastTh, lastT, omega}
-const obs = new Float32Array(P.OBS_DIM);
+let obs = new Float32Array(P.OBS_DIM);
 const trace = [];  // {th, x, f}
 const TRACE_N = 500;
 const trail = [];
 
-function setState(x, xd, th, thd) {
-  s[0] = x; s[1] = xd; s[2] = PD.wrap(th); s[3] = thd;
-  lastU = 0; uprightSince = null;
+// angles and spins are arrays, one entry per link
+function setState(x, xd, ths, tds) {
+  s[I.x] = x; s[I.xd] = xd;
+  I.th.forEach((i, k) => { s[i] = PD.wrap(ths[k]); s[I.td[k]] = tds[k]; });
+  lastU = 0; uprightSince = null; trail.length = 0;
 }
+const rnd = (a, b) => a + (b - a) * Math.random();
+const perLink = f => I.th.map((_, k) => f(k));
 function randomStart() {
-  const r = (a, b) => a + (b - a) * Math.random();
-  setState(r(-1.5, 1.5), r(-1, 1), r(-Math.PI, Math.PI), r(-8, 8));
+  setState(rnd(-1.5, 1.5), rnd(-1, 1), perLink(() => rnd(-Math.PI, Math.PI)), perLink(k => rnd(-6, 6) * (k ? 1.3 : 1)));
 }
 randomStart();
 
@@ -322,7 +353,7 @@ function fmtSteps(n) {
 }
 function simDays(n) { const sec = n * P.CTRL_DT; return sec < 3600 ? Math.round(sec / 60) + " sim-min" :
   sec < 86400 ? (sec / 3600).toFixed(1) + " sim-hours" : (sec / 86400).toFixed(1) + " sim-days"; }
-function brainList() { return liveBrain ? snapshots.concat([liveBrain]) : snapshots; }
+function brainList() { return liveBrain && sysName === "single" ? snapshots.concat([liveBrain]) : snapshots; }
 function selectBrain(i) {
   const list = brainList();
   brainIdx = Math.max(0, Math.min(list.length - 1, i));
@@ -331,24 +362,65 @@ function selectBrain(i) {
   $("brainSlider").max = list.length - 1;
   $("brainSlider").value = brainIdx;
   $("brainLabel").textContent = b ? (b.live ? "LIVE · " + fmtSteps(b.steps) : fmtSteps(b.steps)) : "–";
-  $("brainMax").textContent = liveBrain ? "your live brain" : "fully trained";
+  $("brainMax").textContent = liveBrain && sysName === "single" ? "your live brain" : "fully trained";
 }
 $("brainSlider").addEventListener("input", e => selectBrain(+e.target.value));
 
-fetch("weights.json").then(r => r.json()).then(w => {
-  snapshots = w.snapshots.map(sn => ({ steps: sn.steps, policy: PD.makePolicy(sn.layers) }));
-  selectBrain(snapshots.length - 1);
-}).catch(err => { $("statusText").textContent = "Could not load weights"; console.error(err); });
+function loadBrains(name) {
+  const target = SYS[name];
+  if (target.snapshots) return Promise.resolve();
+  return fetch(target.file).then(r => r.json()).then(w => {
+    target.snapshots = w.snapshots.map(sn => ({ steps: sn.steps, policy: makePolicy(sn.layers) }));
+  });
+}
+
+function setSystem(name) {
+  sysName = name; sys = SYS[name];
+  PD = sys.PD; P = PD.P; s = sys.s; params = sys.params; I = sys.I;
+  obs = new Float32Array(P.OBS_DIM); dispObs = new Float32Array(P.OBS_DIM);
+  document.querySelectorAll("#sysSeg button").forEach(b => b.classList.toggle("on", b.dataset.sys === name));
+  document.body.dataset.sys = name;
+  $("subLine").firstChild.textContent = `PPO agent · ${P.MAX_FORCE} N motor · 4.8 m rail · 50 Hz control · `;
+  $("legTh").textContent = name === "double" ? "Lower / upper link angle (±180°)" : "Pole angle (±180°)";
+  $("legF").textContent = `Motor force (±${P.MAX_FORCE} N)`;
+  $("lenLabel").textContent = name === "double" ? "Total length (2 links)" : "Pole length";
+  $("massLabel").textContent = name === "double" ? "Mass per link" : "Pole mass";
+  $("worldNote").textContent = name === "double"
+    ? "Training varied link lengths ±8%, masses ±15% and friction ×½ to ×2: a narrower range than the single, because the double is much less forgiving."
+    : "Training varied pole length ±15%, pole mass ±30%, cart mass ±20% and friction ×½ to ×2. Push beyond that and see where the AI breaks.";
+  $("trainGroup").classList.toggle("disabled", name !== "single");
+  $("sysNote").textContent = name === "double"
+    ? "Two 0.6 m links hinged end to end, driven by one 25 N motor. Chaotic, and far harder to balance."
+    : "One 1 m pole on a pivot, driven by a 15 N motor.";
+  const d = sys.defaults;
+  sliders.forEach(([sid]) => { $(sid).value = d[sid]; $(sid).dispatchEvent(new Event("input")); });
+  trace.length = 0; trail.length = 0; wireNet = null; wireHover = null;
+  setModeNote();
+  try { history.replaceState(null, "", name === "double" ? "#double" : location.pathname + location.search); } catch (e) {}
+  policy = null; snapshots = [];
+  $("brainLabel").textContent = "loading…";
+  loadBrains(name).then(() => {
+    if (sysName !== name) return;
+    snapshots = sys.snapshots;
+    selectBrain(snapshots.length - 1);
+  }).catch(err => { $("statusText").textContent = "Could not load weights"; console.error(err); });
+  randomStart();
+}
+document.querySelectorAll("#sysSeg button").forEach(b => b.onclick = () => { if (b.dataset.sys !== sysName) setSystem(b.dataset.sys); });
 
 // ---------------- controls ----------------
 function setMode(m) {
   mode = m;
   document.querySelectorAll("#modeSeg button").forEach(b => b.classList.toggle("on", b.dataset.mode === m));
+  setModeNote();
+}
+function setModeNote() {
   $("modeNote").innerHTML = {
     ai: "The trained network reads the cart and pole 50 times a second and sets the motor force.",
-    off: "Motor off. The pendulum just swings, and friction slowly drains its energy.",
-    manual: "Your turn. Hold <kbd>←</kbd> <kbd>→</kbd>, or press and hold the left or right half of the picture, to push with the full 15 N. Good luck.",
-  }[m];
+    off: sysName === "double" ? "Motor off. Watch the double pendulum go chaotic, while friction slowly drains its energy."
+                              : "Motor off. The pendulum just swings, and friction slowly drains its energy.",
+    manual: `Your turn. Hold <kbd>←</kbd> <kbd>→</kbd>, or press and hold the left or right half of the picture, to push with the full ${P.MAX_FORCE} N. Good luck${sysName === "double" ? ". You'll need it" : ""}.`,
+  }[mode];
 }
 document.querySelectorAll("#modeSeg button").forEach(b => b.onclick = () => setMode(b.dataset.mode));
 document.querySelectorAll("#speedSeg button").forEach(b => b.onclick = () => {
@@ -356,15 +428,16 @@ document.querySelectorAll("#speedSeg button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#speedSeg button").forEach(x => x.classList.toggle("on", x === b));
 });
 $("bRandom").onclick = randomStart;
-$("bDown").onclick = () => setState(0, 0, Math.PI - 0.02 * (Math.random() - 0.5), 0);
-$("bUp").onclick = () => setState(0, 0, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5));
-$("bSpin").onclick = () => setState((Math.random() - 0.5), 0, Math.random() * 6.28, (Math.random() < 0.5 ? -1 : 1) * (9 + Math.random() * 3));
+$("bDown").onclick = () => setState(0, 0, perLink(() => Math.PI + rnd(-0.01, 0.01)), perLink(() => 0));
+$("bUp").onclick = () => setState(0, 0, perLink(() => rnd(-0.2, 0.2) / I.th.length), perLink(() => rnd(-0.5, 0.5)));
+$("bSpin").onclick = () => { const dir = Math.random() < 0.5 ? -1 : 1;
+  setState(rnd(-0.5, 0.5), 0, perLink(() => rnd(-Math.PI, Math.PI)), perLink(k => dir * (k ? rnd(-4, 10) : rnd(8, 11)))); };
 $("bLeft").onclick = () => { shove = -40; shoveLeft = 6; };
 $("bRight").onclick = () => { shove = 40; shoveLeft = 6; };
 
 const sliders = [
-  ["sLen", "vLen", v => { params.l = v / 2; return v.toFixed(2) + " m"; }],
-  ["sMass", "vMass", v => { params.mp = v; return v.toFixed(2) + " kg"; }],
+  ["sLen", "vLen", v => { if (sysName === "double") { params.L1 = params.L2 = v / 2; } else params.l = v / 2; return v.toFixed(2) + " m"; }],
+  ["sMass", "vMass", v => { if (sysName === "double") { params.m1 = params.m2 = v; } else params.mp = v; return v.toFixed(2) + " kg"; }],
   ["sCart", "vCart", v => { params.mc = v; return v.toFixed(2) + " kg"; }],
   ["sFric", "vFric", v => { params.bc = v; return v.toFixed(2); }],
 ];
@@ -374,7 +447,7 @@ sliders.forEach(([sid, vid, fn]) => {
   el.addEventListener("input", upd); upd();
 });
 $("bDefaults").onclick = () => {
-  const d = { sLen: 1.0, sMass: 0.2, sCart: 1.0, sFric: 0.5 };
+  const d = sys.defaults;
   sliders.forEach(([sid]) => { $(sid).value = d[sid]; $(sid).dispatchEvent(new Event("input")); });
 };
 
@@ -405,43 +478,59 @@ resize();
 const toPx = (x, y) => [ox + x * scale, oy - y * scale];
 
 function pivotPx() { return toPx(s[0], 0.06); }
-function tipWorld() { const L = params.l * 2; return [s[0] + L * Math.sin(s[2]), 0.06 + L * Math.cos(s[2])]; }
+// world positions of the pivot, each joint and the tip
+function jointsWorld() {
+  const pts = [[s[0], 0.06]];
+  sys.links(params).forEach((L, k) => {
+    const [x, y] = pts[pts.length - 1];
+    pts.push([x + L * Math.sin(th(k)), y + L * Math.cos(th(k))]);
+  });
+  return pts;
+}
+function tipWorld() { const j = jointsWorld(); return j[j.length - 1]; }
 
 // drag the pole
 let pressSide = 0;
 function ptr(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
 cv.addEventListener("pointerdown", e => {
   const [mx, my] = ptr(e);
-  const [px, py] = pivotPx();
-  const [tx, ty] = toPx(...tipWorld());
-  // distance from point to pole segment
-  const vx = tx - px, vy = ty - py, len2 = vx * vx + vy * vy;
-  const t = Math.max(0, Math.min(1, ((mx - px) * vx + (my - py) * vy) / len2));
-  const d = Math.hypot(mx - (px + t * vx), my - (py + t * vy));
+  const pts = jointsWorld().map(p => toPx(...p));
+  // nearest link to the pointer
+  let d = Infinity, link = 0;
+  for (let k = 0; k + 1 < pts.length; k++) {
+    const [px, py] = pts[k], [tx, ty] = pts[k + 1];
+    const vx = tx - px, vy = ty - py, len2 = vx * vx + vy * vy;
+    const t = Math.max(0, Math.min(1, ((mx - px) * vx + (my - py) * vy) / len2));
+    const dk = Math.hypot(mx - (px + t * vx), my - (py + t * vy));
+    if (dk < d) { d = dk; link = k; }
+  }
   cv.setPointerCapture(e.pointerId);
   if (d < 28) {
-    drag = { lastTh: s[2], lastT: performance.now(), omega: 0 };
+    drag = { link, lastTh: th(link), lastT: performance.now(), omega: 0 };
     cv.classList.add("grabbing");
     dragTo(mx, my);
   } else if (mode === "manual") {
     pressSide = mx < W / 2 ? -1 : 1;
   }
 });
+// Dragging swings the grabbed link about its own base joint; the whole
+// pendulum is held still while you hold it.
 function dragTo(mx, my) {
-  const [px, py] = pivotPx();
-  const th = Math.atan2(mx - px, py - my);
+  const [px, py] = toPx(...jointsWorld()[drag.link]);
+  const a = Math.atan2(mx - px, py - my);
   const now = performance.now();
   const dt = Math.max(1, now - drag.lastT) / 1000;
-  let dth = PD.wrap(th - drag.lastTh);
+  const dth = PD.wrap(a - drag.lastTh);
   drag.omega = 0.6 * drag.omega + 0.4 * (dth / dt) * speed;
-  drag.lastTh = th; drag.lastT = now;
-  s[2] = th; s[3] = 0; s[1] = 0;
+  drag.lastTh = a; drag.lastT = now;
+  s[I.th[drag.link]] = a; s[I.xd] = 0;
+  I.td.forEach(i => s[i] = 0);
 }
 cv.addEventListener("pointermove", e => { if (drag) dragTo(...ptr(e)); });
 function endDrag() {
   if (drag) {
     const fresh = performance.now() - drag.lastT < 80;
-    s[3] = fresh ? Math.max(-20, Math.min(20, drag.omega)) : 0;
+    s[I.td[drag.link]] = fresh ? Math.max(-20, Math.min(20, drag.omega)) : 0;
     drag = null; uprightSince = null;
     cv.classList.remove("grabbing");
   }
@@ -476,28 +565,38 @@ function controlStep() {
     PD.rk4(s, F, params, P.PHYS_DT);
     endStops();
   }
-  s[2] = PD.wrap(s[2]);
+  I.th.forEach(i => s[i] = PD.wrap(s[i]));
   rewardNow = PD.reward(s, u);
   lastU = u;
   simTime += P.CTRL_DT;
 
-  const up = Math.abs(s[2]) < 0.1745 && Math.abs(s[3]) < 3;
+  const up = worstAngle() < 0.1745 && Math.max(...I.td.map(i => Math.abs(s[i]))) < 3;
   if (up && uprightSince === null) uprightSince = simTime;
   if (!up) uprightSince = null;
 
-  trace.push({ th: s[2], x: s[0], f: F });
+  trace.push({ th: th(0), th2: I.th.length > 1 ? th(1) : null, x: s[0], f: F });
   if (trace.length > TRACE_N) trace.shift();
 }
 
-// Hard rubber stops at the rail ends. The cart's velocity jumps, and the pole
-// gets the matching angular impulse: dθ' = -3 cosθ Δv / (4 l) for a uniform rod.
+// Hard rubber stops at the rail ends. The cart's velocity jumps by Δv and the
+// links get the matching angular impulse. Single rod: dθ' = -3 cosθ Δv / (4 l).
+// Double: an impulse on the cart alone changes velocities along the first
+// column of M^-1, so dθi' = (C1i / C11) Δv using the mass matrix cofactors.
 function endStops() {
-  const lim = P.RAIL_HALF;
-  if ((s[0] > lim && s[1] > 0) || (s[0] < -lim && s[1] < 0)) {
-    const v0 = s[1], v1 = -0.25 * v0, dv = v1 - v0;
+  const lim = P.RAIL_HALF, xd = s[I.xd];
+  if ((s[0] > lim && xd > 0) || (s[0] < -lim && xd < 0)) {
+    const v1 = -0.25 * xd, dv = v1 - xd;
     s[0] = Math.sign(s[0]) * lim;
-    s[1] = v1;
-    s[3] += -3 * Math.cos(s[2]) * dv / (4 * params.l);
+    s[I.xd] = v1;
+    if (sysName === "single") s[3] += -3 * Math.cos(s[2]) * dv / (4 * params.l);
+    else {
+      const p = params, l1 = p.L1 / 2, l2 = p.L2 / 2;
+      const a = p.m1 * l1 + p.m2 * p.L1, b = p.m2 * l2, c = p.m2 * p.L1 * l2;
+      const J1 = p.m1 * l1 * l1 + p.m1 * p.L1 * p.L1 / 12 + p.m2 * p.L1 * p.L1, J2 = p.m2 * l2 * l2 + p.m2 * p.L2 * p.L2 / 12;
+      const M12 = a * Math.cos(s[1]), M13 = b * Math.cos(s[2]), M23 = c * Math.cos(s[1] - s[2]);
+      const C11 = J1 * J2 - M23 * M23, C12 = M13 * M23 - M12 * J2, C13 = M12 * M23 - M13 * J1;
+      s[4] += C12 / C11 * dv; s[5] += C13 / C11 * dv;
+    }
     if (Math.abs(dv) > 0.3) bumpFlash = 1;
   }
 }
@@ -513,7 +612,7 @@ function draw() {
   for (let gy = -2; gy <= 2; gy += 0.5) { const [, y] = toPx(0, gy); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
   // upright target line
-  const [, yTop] = toPx(0, 0.06 + params.l * 2);
+  const [, yTop] = toPx(0, 0.06 + sys.links(params).reduce((a, b) => a + b, 0));
   ctx.setLineDash([3, 5]); ctx.strokeStyle = "#ffffff14";
   ctx.beginPath(); ctx.moveTo(0, yTop); ctx.lineTo(W, yTop); ctx.stroke(); ctx.setLineDash([]);
 
@@ -574,21 +673,27 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(hx + dir * 8, ay); ctx.lineTo(hx - dir * 2, ay - 6); ctx.lineTo(hx - dir * 2, ay + 6); ctx.fill();
   }
 
-  // pole
-  const [px, py] = pivotPx();
-  const [tx, ty] = toPx(...tipWorld());
-  ctx.strokeStyle = drag ? "#ffd38a" : C.pole; ctx.lineWidth = Math.max(4, 0.035 * scale);
-  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, ty); ctx.stroke();
-  // mass shown at the rod's tip only as a cap; the rod is uniform
-  ctx.fillStyle = C.pole;
-  ctx.beginPath(); ctx.arc(tx, ty, Math.max(5, 0.03 * scale + params.mp * 0.05 * scale), 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(px, py, 4.5, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = "#06080d"; ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.fill();
+  // pole (one or two links)
+  const pts = jointsWorld().map(p => toPx(...p));
+  const [px, py] = pts[0];
+  const LINK_COL = [C.pole, "#ffd27a"];
+  for (let k = 0; k + 1 < pts.length; k++) {
+    ctx.strokeStyle = drag && drag.link === k ? "#fff0c8" : LINK_COL[k]; ctx.lineWidth = Math.max(4, 0.035 * scale);
+    ctx.beginPath(); ctx.moveTo(...pts[k]); ctx.lineTo(...pts[k + 1]); ctx.stroke();
+  }
+  const [tx, ty] = pts[pts.length - 1];
+  ctx.fillStyle = LINK_COL[pts.length - 2];
+  ctx.beginPath(); ctx.arc(tx, ty, Math.max(5, 0.03 * scale + (params.mp || params.m2) * 0.05 * scale), 0, Math.PI * 2); ctx.fill();
+  // joints
+  for (let k = 0; k + 1 < pts.length; k++) {
+    ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(...pts[k], 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#06080d"; ctx.beginPath(); ctx.arc(...pts[k], 2, 0, Math.PI * 2); ctx.fill();
+  }
 
-  // angle arc
-  if (Math.abs(s[2]) > 0.02) {
+  // angle arc (first link)
+  if (Math.abs(th(0)) > 0.02) {
     ctx.strokeStyle = "#f4b35055"; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(px, py, 0.22 * scale, -Math.PI / 2, -Math.PI / 2 + s[2], s[2] < 0); ctx.stroke();
+    ctx.beginPath(); ctx.arc(px, py, 0.22 * scale, -Math.PI / 2, -Math.PI / 2 + th(0), th(0) < 0); ctx.stroke();
   }
   bumpFlash = Math.max(0, bumpFlash - 0.04);
 }
@@ -608,15 +713,18 @@ function drawTrace() {
   tctx.strokeStyle = C.grid; tctx.lineWidth = 1;
   tctx.beginPath(); tctx.moveTo(0, h / 2); tctx.lineTo(w, h / 2); tctx.stroke();
   const series = [["f", P.MAX_FORCE * 2, C.force, 1.2], ["x", P.RAIL_HALF, C.cart, 1.6], ["th", Math.PI, C.pole, 1.8]];
+  if (sysName === "double") series.push(["th2", Math.PI, "#ffd27a", 1.2]);
   for (const [k, lim, col, lw] of series) {
     tctx.strokeStyle = col; tctx.lineWidth = lw; tctx.beginPath();
     let prev = null;
     trace.forEach((p, i) => {
+      if (p[k] === null || p[k] === undefined) return;
       const x = w - (trace.length - 1 - i) * (w / (TRACE_N - 1));
       const y = h / 2 - Math.max(-1, Math.min(1, p[k] / lim)) * (h / 2 - 4);
-      if (k === "th" && prev !== null && Math.abs(p.th - prev) > Math.PI) tctx.moveTo(x, y); // wrap
-      else if (i === 0) tctx.moveTo(x, y); else tctx.lineTo(x, y);
-      prev = p.th;
+      const isAng = k === "th" || k === "th2";
+      if (prev === null || (isAng && Math.abs(p[k] - prev) > Math.PI)) tctx.moveTo(x, y); // start / wrap
+      else tctx.lineTo(x, y);
+      prev = p[k];
     });
     tctx.stroke();
   }
@@ -633,15 +741,30 @@ document.querySelectorAll("#wireSeg button").forEach(b => b.onclick = () => {
   wireMode = b.dataset.wire;
   document.querySelectorAll("#wireSeg button").forEach(x => x.classList.toggle("on", x === b));
 });
-const IN_LABELS = [
-  ["cart position", "x", v => (v * P.RAIL_HALF).toFixed(2) + " m"],
-  ["cart speed", "ẋ", v => (v * 3).toFixed(2) + " m/s"],
-  ["cos angle", "cos θ", v => v.toFixed(2)],
-  ["sin angle", "sin θ", v => v.toFixed(2)],
-  ["spin", "θ̇", v => (v * 10 * 180 / Math.PI).toFixed(0) + "°/s"],
-  ["last push", "u", v => (v * P.MAX_FORCE).toFixed(1) + " N"],
-];
-const dispObs = new Float32Array(P.OBS_DIM);
+const deg = v => (v * 180 / Math.PI).toFixed(0) + "°/s";
+const LABELS = {
+  single: [
+    ["cart position", "x", v => (v * P.RAIL_HALF).toFixed(2) + " m"],
+    ["cart speed", "ẋ", v => (v * 3).toFixed(2) + " m/s"],
+    ["cos angle", "cos θ", v => v.toFixed(2)],
+    ["sin angle", "sin θ", v => v.toFixed(2)],
+    ["spin", "θ̇", v => deg(v * 10)],
+    ["last push", "u", v => (v * P.MAX_FORCE).toFixed(1) + " N"],
+  ],
+  double: [
+    ["cart position", "x", v => (v * P.RAIL_HALF).toFixed(2) + " m"],
+    ["cart speed", "ẋ", v => (v * 3).toFixed(2) + " m/s"],
+    ["cos lower", "cos θ₁", v => v.toFixed(2)],
+    ["sin lower", "sin θ₁", v => v.toFixed(2)],
+    ["cos upper", "cos θ₂", v => v.toFixed(2)],
+    ["sin upper", "sin θ₂", v => v.toFixed(2)],
+    ["spin lower", "θ̇₁", v => deg(v * 10)],
+    ["spin upper", "θ̇₂", v => deg(v * 15)],
+    ["last push", "u", v => (v * P.MAX_FORCE).toFixed(1) + " N"],
+  ],
+};
+const inLabels = () => LABELS[sysName];
+let dispObs = new Float32Array(P.OBS_DIM);
 
 // Order the hidden neurons by how they push the output: neurons that push the
 // cart right end up at the top, those that push left at the bottom. This
@@ -742,7 +865,7 @@ function drawWire() {
 
   // Nodes
   const fillFor = v => v >= 0 ? `rgba(244,179,80,${0.15 + 0.85 * Math.min(1, v)})` : `rgba(63,214,198,${0.15 + 0.85 * Math.min(1, -v)})`;
-  wctx.font = `${lay.narrow ? 10 : 11}px ${css("--mono")}`;
+  wctx.font = `${lay.narrow ? 10 : (net.sizes[0] > 6 ? 10 : 11)}px ${css("--mono")}`;
   for (let layer = 0; layer < 4; layer++) {
     const n = net.sizes[layer];
     const big = layer === 0 || layer === 3;
@@ -755,7 +878,7 @@ function drawWire() {
       wctx.lineWidth = hov && hov.layer === layer && hov.idx === idx ? 2 : 1;
       wctx.beginPath(); wctx.arc(x, y, rad, 0, Math.PI * 2); wctx.fill(); wctx.stroke();
       if (layer === 0) {
-        const [long, short, fmt] = IN_LABELS[idx];
+        const [long, short, fmt] = inLabels()[idx];
         wctx.textAlign = "right"; wctx.fillStyle = C.dim;
         if (lay.narrow) wctx.fillText(short, x - 12, y + 4);
         else {
@@ -784,8 +907,8 @@ function drawWire() {
 function describeHover(net, acts) {
   const { layer, idx } = wireHover;
   let txt;
-  if (layer === 0) txt = `<b>Input · ${IN_LABELS[idx][0]}</b> = ${IN_LABELS[idx][2](acts[0][idx])} (fed in as ${acts[0][idx].toFixed(2)})`;
-  else if (layer === 3) txt = `<b>Output</b> ${acts[3][0].toFixed(2)} × 15 N = ${(acts[3][0] * P.MAX_FORCE).toFixed(1)} N`;
+  if (layer === 0) txt = `<b>Input · ${inLabels()[idx][0]}</b> = ${inLabels()[idx][2](acts[0][idx])} (fed in as ${acts[0][idx].toFixed(2)})`;
+  else if (layer === 3) txt = `<b>Output</b> ${acts[3][0].toFixed(2)} × ${P.MAX_FORCE} N = ${(acts[3][0] * P.MAX_FORCE).toFixed(1)} N`;
   else {
     const out = acts[layer][idx];
     const toOut = layer === 2 ? net.L[2].W[idx] : net.eff1[idx];
@@ -817,23 +940,24 @@ wc.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") { wire
 
 function setStatus() {
   let txt, col;
-  const deg = Math.abs(s[2]) * 180 / Math.PI;
+  const worst = worstAngle() * 180 / Math.PI;
+  const maxSpin = Math.max(...I.td.map(i => Math.abs(s[i])));
   if (drag) { txt = "Held"; col = C.dim; }
   else if (bumpFlash > 0.5) { txt = "End stop!"; col = C.danger; }
   else if (mode === "off") { txt = "Motor off · swinging freely"; col = C.faint; }
   else if (mode === "manual") { txt = "You are driving"; col = C.force; }
   else if (!policy) { txt = "Loading brain"; col = C.faint; }
-  else if (deg < 3 && Math.abs(s[3]) < 0.5 && Math.abs(s[1]) < 0.1) { txt = "Balanced"; col = C.good; }
-  else if (deg < 25) { txt = "Balancing"; col = C.good; }
+  else if (worst < 3 && maxSpin < 0.5 && Math.abs(s[I.xd]) < 0.1) { txt = "Balanced"; col = C.good; }
+  else if (worst < 25) { txt = "Balancing"; col = C.good; }
   else { txt = "Swinging up"; col = C.pole; }
   $("statusText").textContent = txt;
   $("statusDot").style.background = col;
 }
 
 function readouts() {
-  const deg = s[2] * 180 / Math.PI;
-  $("roAngle").textContent = (deg >= 0 ? "+" : "") + deg.toFixed(1) + "°";
-  $("roSpin").textContent = (s[3] * 180 / Math.PI).toFixed(0) + "°/s";
+  const sg = v => (v >= 0 ? "+" : "") + v;
+  $("roAngle").textContent = I.th.map(i => sg((s[i] * 180 / Math.PI).toFixed(sysName === "double" ? 0 : 1)) + "°").join(" / ");
+  $("roSpin").textContent = I.td.map(i => (s[i] * 180 / Math.PI).toFixed(0)).join(" / ") + "°/s";
   $("roX").textContent = (s[0] >= 0 ? "+" : "") + s[0].toFixed(2) + " m";
   $("roF").textContent = force.toFixed(1) + " N";
   $("roR").textContent = rewardNow.toFixed(3);
@@ -868,9 +992,11 @@ function ensureWorker() {
     if (m.type !== "progress") return;
     const wasLive = liveBrain && brainIdx === snapshots.length;
     const first = !liveBrain;
-    liveBrain = { steps: m.steps, live: true, policy: PD.makePolicy(m.layers) };
-    if (first || wasLive) selectBrain(snapshots.length);
-    else selectBrain(brainIdx);
+    liveBrain = { steps: m.steps, live: true, policy: makePolicy(m.layers) };
+    if (sysName === "single") {
+      if (first || wasLive) selectBrain(snapshots.length);
+      else selectBrain(brainIdx);
+    }
     $("tSteps").textContent = m.steps.toLocaleString();
     $("tSps").textContent = Math.round(m.sps || 0).toLocaleString();
     $("tRet").textContent = m.epReturn == null ? "–" : m.epReturn.toFixed(0);
@@ -912,6 +1038,10 @@ function drawCurve() {
   lctx.stroke();
   lctx.fillText(hi.toFixed(0), w - 30, 12);
 }
+
+// start in whichever world the URL asks for
+setSystem(location.hash === "#double" ? "double" : "single");
+addEventListener("hashchange", () => { const want = location.hash === "#double" ? "double" : "single"; if (want !== sysName) setSystem(want); });
 </script>
 </body>
 </html>

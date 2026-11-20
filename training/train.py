@@ -1,6 +1,7 @@
 """PPO training for the swing-up and balance task.
 
-    python train.py --steps 20000000 --out runs/main
+    python train.py --steps 3e7 --out runs/main                       # single pendulum
+    python train.py --system double --steps 2e8 --out runs/double     # double pendulum
 
 Writes checkpoints and, at the end, ../weights.json for the web page (the
 policy network at several points during training, so the page can show the
@@ -16,7 +17,23 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from env import (ACT_DIM, OBS_DIM, CTRL_DT, EPISODE_STEPS, CartPoleVec)
+import env as single_env
+import env_double as double_env
+from env import ACT_DIM, CTRL_DT, EPISODE_STEPS
+
+SYSTEMS = {
+    # name: (env module, env class, policy hidden, critic hidden)
+    "single": (single_env, single_env.CartPoleVec, 64, 128),
+    "double": (double_env, double_env.DoublePoleVec, 128, 256),
+}
+
+
+def angle_error(obs, system):
+    """Worst angle from upright, in radians, for each row of observations."""
+    a = np.abs(np.arctan2(obs[:, 3], obs[:, 2]))
+    if system == "double":
+        a = np.maximum(a, np.abs(np.arctan2(obs[:, 5], obs[:, 4])))
+    return a
 
 torch.set_num_threads(4)
 
@@ -24,10 +41,10 @@ torch.set_num_threads(4)
 class Policy(nn.Module):
     """Gaussian policy. The mean goes through tanh so it lives in [-1, 1]."""
 
-    def __init__(self, hidden=64):
+    def __init__(self, hidden=64, obs_dim=single_env.OBS_DIM):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(OBS_DIM, hidden), nn.Tanh(),
+            nn.Linear(obs_dim, hidden), nn.Tanh(),
             nn.Linear(hidden, hidden), nn.Tanh(),
             nn.Linear(hidden, ACT_DIM), nn.Tanh(),
         )
@@ -41,10 +58,10 @@ class Policy(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, hidden=128):
+    def __init__(self, hidden=128, obs_dim=single_env.OBS_DIM):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(OBS_DIM, hidden), nn.Tanh(),
+            nn.Linear(obs_dim, hidden), nn.Tanh(),
             nn.Linear(hidden, hidden), nn.Tanh(),
             nn.Linear(hidden, 1),
         )
@@ -65,9 +82,9 @@ def export_policy(policy):
 
 
 @torch.no_grad()
-def evaluate(policy, episodes=64, seed=123):
+def evaluate(policy, episodes=64, seed=123, system="single"):
     """Deterministic policy, nominal physics, no pushes. Returns metrics."""
-    env = CartPoleVec(episodes, seed=seed, randomise=False, pushes=False)
+    env = SYSTEMS[system][1](episodes, seed=seed, randomise=False, pushes=False)
     obs = env.obs()
     total = np.zeros(episodes)
     alive = np.ones(episodes, bool)
@@ -82,12 +99,11 @@ def evaluate(policy, episodes=64, seed=123):
         crashed |= c & alive
         ended = alive & (c | tr)
         fo = info["final_obs"]
-        final_angle[ended] = np.degrees(np.abs(np.arctan2(fo[ended, 3], fo[ended, 2])))
+        err = angle_error(fo, system)
+        final_angle[ended] = np.degrees(err[ended])
         final_x[ended] = np.abs(fo[ended, 0] * 2.4)
-        cos = fo[:, 2]
-        # first time it is within 10 degrees of upright (and stays there for good is
-        # measured below via final angle)
-        first = alive & np.isnan(up_time) & (cos > np.cos(np.radians(10)))
+        # first time it is within 10 degrees of upright
+        first = alive & np.isnan(up_time) & (err < np.radians(10))
         up_time[first] = t * CTRL_DT
         alive &= ~(c | tr)
         if not alive.any():
@@ -105,6 +121,7 @@ def evaluate(policy, episodes=64, seed=123):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--system", choices=list(SYSTEMS), default="single")
     ap.add_argument("--steps", type=float, default=2e7)
     ap.add_argument("--envs", type=int, default=128)
     ap.add_argument("--horizon", type=int, default=256)
@@ -128,8 +145,10 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    env = CartPoleVec(args.envs, seed=args.seed)
-    policy, critic = Policy(), Critic()
+    mod, env_cls, ph, ch = SYSTEMS[args.system]
+    OBS_DIM = mod.OBS_DIM
+    env = env_cls(args.envs, seed=args.seed)
+    policy, critic = Policy(ph, OBS_DIM), Critic(ch, OBS_DIM)
     if args.init:
         ck = torch.load(args.init)
         policy.load_state_dict(ck["policy"])
@@ -232,19 +251,19 @@ def main():
             row = {"update": upd, "steps": steps, "ep_return": rec,
                    "std": float(policy.log_std.exp().detach()), "sps": steps / (time.time() - t0)}
             if upd % 50 == 0 or upd == updates - 1:
-                row["eval"] = evaluate(policy)
+                row["eval"] = evaluate(policy, system=args.system)
                 torch.save({"policy": policy.state_dict(), "critic": critic.state_dict()},
                            os.path.join(args.out, "ckpt.pt"))
             print(json.dumps(row), flush=True)
             log.write(json.dumps(row) + "\n")
             log.flush()
 
-    final_eval = evaluate(policy, episodes=256, seed=999)
+    final_eval = evaluate(policy, episodes=256, seed=999, system=args.system)
     print("final eval", json.dumps(final_eval))
     torch.save({"policy": policy.state_dict(), "critic": critic.state_dict()},
                os.path.join(args.out, "ckpt.pt"))
     with open(os.path.join(args.out, "weights.json"), "w") as f:
-        json.dump({"activation": "tanh", "obs_dim": OBS_DIM,
+        json.dump({"activation": "tanh", "obs_dim": OBS_DIM, "system": args.system,
                    "eval": final_eval, "snapshots": snapshots}, f, separators=(",", ":"))
 
 
