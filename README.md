@@ -3,7 +3,7 @@
 A cart on a finite rail learns, with reinforcement learning (PPO), to swing a
 pole up from **any** starting angle and spin and then hold it upright and still.
 
-**Live:** https://alexbaker0.github.io/inverted-pendulum/
+**Live:** https://alexbaker0.github.io/Inverted-pendulum/
 
 On the page you can:
 
