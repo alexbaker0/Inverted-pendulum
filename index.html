@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inverted Pendulum: a cart that learned to balance</title>
+<meta name="description" content="A cart on a rail learns, with PPO reinforcement learning, to swing a pendulum up from any position and hold it still and upright.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='7' y='22' width='18' height='6' rx='2' fill='%233fd6c6'/%3E%3Cpath d='M16 22V5' stroke='%23f4b350' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='5' r='3.5' fill='%23f4b350'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #06080d;
+    --panel: #0c111b;
+    --panel-edge: #1a2331;
+    --grid: #121a26;
+    --ink: #e8eef7;
+    --ink-dim: #8695a8;
+    --ink-faint: #5b6a7e;
+    --pole: #f4b350;
+    --cart: #3fd6c6;
+    --force: #9b8cff;
+    --accent: #f4b350;
+    --good: #5ee08a;
+    --danger: #ff5d6c;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); }
+  body {
+    min-height: 100vh;
+    background: radial-gradient(1200px 600px at 30% -10%, #0d1524 0%, transparent 60%), var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    padding: clamp(12px, 3vw, 32px);
+    display: flex; justify-content: center;
+  }
+  .frame {
+    width: 100%; max-width: 1180px;
+    display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px;
+  }
+  @media (max-width: 860px) { .frame { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 600px) {
+    .stage { aspect-ratio: 1 / 1; }
+    .hint .keys { display: none; }
+  }
+
+  header.title {
+    grid-column: 1 / -1;
+    display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--panel-edge); padding-bottom: 14px;
+  }
+  header.title h1 {
+    margin: 0; font-family: var(--mono); font-size: clamp(15px, 2.4vw, 20px); font-weight: 600;
+    letter-spacing: 0.18em; text-transform: uppercase;
+  }
+  header.title h1 span { color: var(--accent); }
+  header.title .sub {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-faint);
+  }
+  header.title a { color: var(--ink-dim); }
+
+  .main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .stage {
+    position: relative; background: linear-gradient(180deg, #0a0f18, #070a11);
+    border: 1px solid var(--panel-edge); border-radius: 12px; overflow: hidden;
+    aspect-ratio: 16 / 10;
+  }
+  .stage canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  .stage canvas.grabbing { cursor: grabbing; }
+  .status {
+    position: absolute; left: 12px; top: 10px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    padding: 5px 9px; border-radius: 6px; background: #0c111bcc; border: 1px solid var(--panel-edge);
+    color: var(--ink-dim); pointer-events: none;
+  }
+  .status b { color: var(--ink); font-weight: 600; }
+  .status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; background: var(--ink-faint); vertical-align: 0; }
+  .clock { position: absolute; right: 12px; top: 10px; font-family: var(--mono); font-size: 11px; color: var(--ink-faint); letter-spacing: 0.08em; pointer-events: none; }
+  .hint {
+    position: absolute; left: 12px; bottom: 10px; right: 12px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em; color: var(--ink-faint);
+    pointer-events: none; text-transform: uppercase;
+  }
+  .chart {
+    background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 12px; padding: 10px 12px 8px;
+  }
+  .chart canvas { display: block; width: 100%; height: 120px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); letter-spacing: 0.06em; margin-bottom: 6px; }
+  .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; }
+
+  .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+  .ro { background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 10px; padding: 9px 11px; }
+  .ro .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); }
+  .ro .v { font-family: var(--mono); font-size: 17px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 12px;
+    padding: 18px 18px 20px; display: flex; flex-direction: column; gap: 22px; align-self: start;
+  }
+  .group h2 {
+    margin: 0 0 11px; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  .seg { display: flex; border: 1px solid var(--panel-edge); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    flex: 1; background: transparent; border: 0; color: var(--ink-dim); padding: 8px 4px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--panel-edge); }
+  .seg button.on { background: #f4b35022; color: var(--accent); }
+  .seg button:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .btn {
+    background: #111826; border: 1px solid var(--panel-edge); color: var(--ink); border-radius: 8px;
+    padding: 8px 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; cursor: pointer;
+  }
+  .btn:hover { border-color: #2a3850; }
+  .btn.primary { background: #f4b35022; border-color: #f4b35066; color: var(--accent); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .control { margin-bottom: 14px; }
+  .control:last-child { margin-bottom: 0; }
+  .control .row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--ink-dim); margin-bottom: 6px; }
+  .control .row span:last-child { color: var(--ink); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .note { font-size: 12px; line-height: 1.5; color: var(--ink-dim); margin: 8px 0 0; }
+  .note b { color: var(--ink); font-weight: 600; }
+  .ticks { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint); margin-top: 2px; }
+  #brainCanvas { display: block; width: 100%; height: 70px; margin-top: 10px; }
+  #liveChart { display: block; width: 100%; height: 90px; margin-top: 10px; background: #080c14; border-radius: 6px; }
+  .stats { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); line-height: 1.7; margin-top: 8px; }
+  .stats span { color: var(--ink); }
+  details summary { cursor: pointer; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-dim); }
+  details p { font-size: 12.5px; line-height: 1.55; color: var(--ink-dim); }
+  details p b { color: var(--ink); }
+  kbd { font-family: var(--mono); font-size: 10px; border: 1px solid var(--panel-edge); border-radius: 4px; padding: 0 4px; color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="frame">
+  <header class="title">
+    <h1>Inverted <span>Pendulum</span></h1>
+    <div class="sub">PPO agent · 15 N motor · 4.8 m rail · 50 Hz control · <a href="https://github.com/alexbaker0/inverted-pendulum">source</a></div>
+  </header>
+
+  <div class="main">
+    <div class="stage">
+      <canvas id="world" aria-label="Simulation of a cart on a rail balancing a pendulum"></canvas>
+      <div class="status" id="status"><span class="dot" id="statusDot"></span><b id="statusText">Loading</b></div>
+      <div class="clock" id="clock">t = 0.0 s</div>
+      <div class="hint">Drag the pole to throw it<span class="keys"> · <kbd>←</kbd> <kbd>→</kbd> shove the cart · <kbd>space</kbd> random start</span></div>
+    </div>
+
+    <div class="chart">
+      <div class="legend">
+        <span><i style="background:var(--pole)"></i>Pole angle (±180°)</span>
+        <span><i style="background:var(--cart)"></i>Cart position (±2.4 m)</span>
+        <span><i style="background:var(--force)"></i>Motor force (±15 N)</span>
+        <span style="margin-left:auto;color:var(--ink-faint)">last 10 s</span>
+      </div>
+      <canvas id="trace"></canvas>
+    </div>
+
+    <div class="readouts">
+      <div class="ro"><div class="k">Angle</div><div class="v" id="roAngle">–</div></div>
+      <div class="ro"><div class="k">Spin</div><div class="v" id="roSpin">–</div></div>
+      <div class="ro"><div class="k">Cart</div><div class="v" id="roX">–</div></div>
+      <div class="ro"><div class="k">Force</div><div class="v" id="roF">–</div></div>
+      <div class="ro"><div class="k">Reward</div><div class="v" id="roR">–</div></div>
+      <div class="ro"><div class="k">Upright for</div><div class="v" id="roUp">–</div></div>
+    </div>
+  </div>
+
+  <aside class="panel">
+    <div class="group">
+      <h2>Who drives the cart</h2>
+      <div class="seg" id="modeSeg" role="group" aria-label="Controller">
+        <button data-mode="ai" class="on">AI</button>
+        <button data-mode="off">Nobody</button>
+        <button data-mode="manual">You</button>
+      </div>
+      <p class="note" id="modeNote">The trained network reads the cart and pole 50 times a second and sets the motor force.</p>
+    </div>
+
+    <div class="group">
+      <h2>Brain</h2>
+      <div class="control">
+        <div class="row"><span>Training so far</span><span id="brainLabel">–</span></div>
+        <input type="range" id="brainSlider" min="0" max="0" step="1" value="0" aria-label="Training checkpoint">
+        <div class="ticks"><span>untrained</span><span id="brainMax">fully trained</span></div>
+      </div>
+      <canvas id="brainCanvas" aria-label="Hidden neuron activity"></canvas>
+      <p class="note">Drag back to see the same network earlier in training. Above: its hidden neurons firing.</p>
+    </div>
+
+    <div class="group">
+      <h2>Start from</h2>
+      <div class="btns">
+        <button class="btn primary" id="bRandom">Random</button>
+        <button class="btn" id="bDown">Hanging down</button>
+        <button class="btn" id="bUp">Nearly upright</button>
+        <button class="btn" id="bSpin">Spinning fast</button>
+        <button class="btn" id="bLeft">◀ Shove</button>
+        <button class="btn" id="bRight">Shove ▶</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>Speed</h2>
+      <div class="seg" id="speedSeg" role="group" aria-label="Simulation speed">
+        <button data-speed="0.1">0.1×</button>
+        <button data-speed="0.25">¼×</button>
+        <button data-speed="1" class="on">1×</button>
+        <button data-speed="3">3×</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>The world</h2>
+      <div class="control">
+        <div class="row"><span>Pole length</span><span id="vLen">1.00 m</span></div>
+        <input type="range" id="sLen" min="0.5" max="1.6" step="0.05" value="1.0">
+      </div>
+      <div class="control">
+        <div class="row"><span>Pole mass</span><span id="vMass">0.20 kg</span></div>
+        <input type="range" id="sMass" min="0.05" max="0.6" step="0.01" value="0.2">
+      </div>
+      <div class="control">
+        <div class="row"><span>Cart mass</span><span id="vCart">1.00 kg</span></div>
+        <input type="range" id="sCart" min="0.4" max="2.5" step="0.05" value="1.0">
+      </div>
+      <div class="control">
+        <div class="row"><span>Rail friction</span><span id="vFric">0.50</span></div>
+        <input type="range" id="sFric" min="0" max="3" step="0.05" value="0.5">
+      </div>
+      <button class="btn" id="bDefaults" style="width:100%">Reset to defaults</button>
+      <p class="note">Training varied pole length ±15%, pole mass ±30%, cart mass ±20% and friction ×½ to ×2. Push beyond that and see where the AI breaks.</p>
+    </div>
+
+    <div class="group">
+      <h2>Train a new brain here</h2>
+      <div class="btns">
+        <button class="btn primary" id="bTrain">Start training</button>
+        <button class="btn" id="bTrainReset">New random brain</button>
+      </div>
+      <canvas id="liveChart" aria-label="Live training progress"></canvas>
+      <div class="stats">
+        Steps <span id="tSteps">0</span> · <span id="tSps">0</span>/s<br>
+        Avg episode score <span id="tRet">–</span> <span style="color:var(--ink-faint)">(max 1000)</span>
+      </div>
+      <p class="note">Runs PPO from scratch in your browser, in a background thread. The live brain is added to the end of the Brain slider, and it drives the cart while selected. Balancing appears within a few minutes. Swinging up takes much longer.</p>
+    </div>
+
+    <details>
+      <summary>How it works</summary>
+      <p><b>The world.</b> A 1 m rod on a frictional pivot, riding on a 1 kg cart. The full nonlinear rigid-body equations are integrated with Runge–Kutta at 400 Hz. The motor can push at most 15 N, the rail ends at ±2.4 m, and hitting an end stop jolts the pole.</p>
+      <p><b>The agent</b> sees six numbers: cart position and speed, the pole angle (as sine and cosine), its spin, and the force it applied last time. It outputs one number, the motor force. That is a 6→64→64→1 network with tanh units.</p>
+      <p><b>The reward</b>, each 1/50 s, is between 0 and 1. It is 1 only when the pole is upright, the cart is in the middle of the rail, nothing is moving and the motor is idle. Hitting an end stop costs 20 and ends the episode.</p>
+      <p><b>Training</b> used PPO for 36 million steps, about 8 simulated days, starting from random angles, spins and positions. The physics was jittered and the cart was shoved at random, so the agent copes with a world it has not seen.</p>
+    </details>
+  </aside>
+</div>
+
+<script src="physics.js"></script>
+<script>
+"use strict";
+const PD = window.Pendulum, P = PD.P;
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = { pole: css("--pole"), cart: css("--cart"), force: css("--force"), ink: css("--ink"),
+            dim: css("--ink-dim"), faint: css("--ink-faint"), grid: css("--grid"),
+            edge: css("--panel-edge"), good: css("--good"), danger: css("--danger") };
+
+// ---------------- state ----------------
+const params = PD.nominalParams();
+const s = new Float64Array(4);           // x, xd, th, thd
+let lastU = 0, force = 0, aiForce = 0, rewardNow = 0, simTime = 0, uprightSince = null;
+let mode = "ai", speed = 1, policy = null, snapshots = [], brainIdx = 0, liveBrain = null;
+let keyL = false, keyR = false, shove = 0, shoveLeft = 0, bumpFlash = 0;
+let drag = null;   // {lastTh, lastT, omega}
+const obs = new Float32Array(P.OBS_DIM);
+const trace = [];  // {th, x, f}
+const TRACE_N = 500;
+const trail = [];
+
+function setState(x, xd, th, thd) {
+  s[0] = x; s[1] = xd; s[2] = PD.wrap(th); s[3] = thd;
+  lastU = 0; uprightSince = null;
+}
+function randomStart() {
+  const r = (a, b) => a + (b - a) * Math.random();
+  setState(r(-1.5, 1.5), r(-1, 1), r(-Math.PI, Math.PI), r(-8, 8));
+}
+randomStart();
+
+// ---------------- brains ----------------
+function fmtSteps(n) {
+  if (n === 0) return "untrained";
+  if (n >= 1e6) return (n / 1e6).toFixed(n < 1e7 ? 1 : 0) + "M steps";
+  return Math.round(n / 1e3) + "k steps";
+}
+function simDays(n) { const sec = n * P.CTRL_DT; return sec < 3600 ? Math.round(sec / 60) + " sim-min" :
+  sec < 86400 ? (sec / 3600).toFixed(1) + " sim-hours" : (sec / 86400).toFixed(1) + " sim-days"; }
+function brainList() { return liveBrain ? snapshots.concat([liveBrain]) : snapshots; }
+function selectBrain(i) {
+  const list = brainList();
+  brainIdx = Math.max(0, Math.min(list.length - 1, i));
+  const b = list[brainIdx];
+  policy = b ? b.policy : null;
+  $("brainSlider").max = list.length - 1;
+  $("brainSlider").value = brainIdx;
+  $("brainLabel").textContent = b ? (b.live ? "LIVE · " + fmtSteps(b.steps) : fmtSteps(b.steps)) : "–";
+  $("brainMax").textContent = liveBrain ? "your live brain" : "fully trained";
+}
+$("brainSlider").addEventListener("input", e => selectBrain(+e.target.value));
+
+fetch("weights.json").then(r => r.json()).then(w => {
+  snapshots = w.snapshots.map(sn => ({ steps: sn.steps, policy: PD.makePolicy(sn.layers) }));
+  selectBrain(snapshots.length - 1);
+}).catch(err => { $("statusText").textContent = "Could not load weights"; console.error(err); });
+
+// ---------------- controls ----------------
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll("#modeSeg button").forEach(b => b.classList.toggle("on", b.dataset.mode === m));
+  $("modeNote").innerHTML = {
+    ai: "The trained network reads the cart and pole 50 times a second and sets the motor force.",
+    off: "Motor off. The pendulum just swings, and friction slowly drains its energy.",
+    manual: "Your turn. Hold <kbd>←</kbd> <kbd>→</kbd>, or press and hold the left or right half of the picture, to push with the full 15 N. Good luck.",
+  }[m];
+}
+document.querySelectorAll("#modeSeg button").forEach(b => b.onclick = () => setMode(b.dataset.mode));
+document.querySelectorAll("#speedSeg button").forEach(b => b.onclick = () => {
+  speed = +b.dataset.speed;
+  document.querySelectorAll("#speedSeg button").forEach(x => x.classList.toggle("on", x === b));
+});
+$("bRandom").onclick = randomStart;
+$("bDown").onclick = () => setState(0, 0, Math.PI - 0.02 * (Math.random() - 0.5), 0);
+$("bUp").onclick = () => setState(0, 0, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5));
+$("bSpin").onclick = () => setState((Math.random() - 0.5), 0, Math.random() * 6.28, (Math.random() < 0.5 ? -1 : 1) * (9 + Math.random() * 3));
+$("bLeft").onclick = () => { shove = -40; shoveLeft = 6; };
+$("bRight").onclick = () => { shove = 40; shoveLeft = 6; };
+
+const sliders = [
+  ["sLen", "vLen", v => { params.l = v / 2; return v.toFixed(2) + " m"; }],
+  ["sMass", "vMass", v => { params.mp = v; return v.toFixed(2) + " kg"; }],
+  ["sCart", "vCart", v => { params.mc = v; return v.toFixed(2) + " kg"; }],
+  ["sFric", "vFric", v => { params.bc = v; return v.toFixed(2); }],
+];
+sliders.forEach(([sid, vid, fn]) => {
+  const el = $(sid);
+  const upd = () => $(vid).textContent = fn(+el.value);
+  el.addEventListener("input", upd); upd();
+});
+$("bDefaults").onclick = () => {
+  const d = { sLen: 1.0, sMass: 0.2, sCart: 1.0, sFric: 0.5 };
+  sliders.forEach(([sid]) => { $(sid).value = d[sid]; $(sid).dispatchEvent(new Event("input")); });
+};
+
+addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" && e.target.type !== "range") return;
+  if (e.key === "ArrowLeft") { keyL = true; e.preventDefault(); }
+  else if (e.key === "ArrowRight") { keyR = true; e.preventDefault(); }
+  else if (e.key === " ") { randomStart(); e.preventDefault(); }
+});
+addEventListener("keyup", e => {
+  if (e.key === "ArrowLeft") keyL = false;
+  if (e.key === "ArrowRight") keyR = false;
+});
+
+// ---------------- canvas / view ----------------
+const cv = $("world"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1, scale = 1, ox = 0, oy = 0;
+function resize() {
+  DPR = Math.min(2, devicePixelRatio || 1);
+  const r = cv.getBoundingClientRect();
+  W = r.width; H = r.height;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  scale = Math.min(W / 5.8, H / 3.7);
+  ox = W / 2; oy = H * 0.52;
+}
+new ResizeObserver(resize).observe(cv);
+resize();
+const toPx = (x, y) => [ox + x * scale, oy - y * scale];
+
+function pivotPx() { return toPx(s[0], 0.06); }
+function tipWorld() { const L = params.l * 2; return [s[0] + L * Math.sin(s[2]), 0.06 + L * Math.cos(s[2])]; }
+
+// drag the pole
+let pressSide = 0;
+function ptr(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+cv.addEventListener("pointerdown", e => {
+  const [mx, my] = ptr(e);
+  const [px, py] = pivotPx();
+  const [tx, ty] = toPx(...tipWorld());
+  // distance from point to pole segment
+  const vx = tx - px, vy = ty - py, len2 = vx * vx + vy * vy;
+  const t = Math.max(0, Math.min(1, ((mx - px) * vx + (my - py) * vy) / len2));
+  const d = Math.hypot(mx - (px + t * vx), my - (py + t * vy));
+  cv.setPointerCapture(e.pointerId);
+  if (d < 28) {
+    drag = { lastTh: s[2], lastT: performance.now(), omega: 0 };
+    cv.classList.add("grabbing");
+    dragTo(mx, my);
+  } else if (mode === "manual") {
+    pressSide = mx < W / 2 ? -1 : 1;
+  }
+});
+function dragTo(mx, my) {
+  const [px, py] = pivotPx();
+  const th = Math.atan2(mx - px, py - my);
+  const now = performance.now();
+  const dt = Math.max(1, now - drag.lastT) / 1000;
+  let dth = PD.wrap(th - drag.lastTh);
+  drag.omega = 0.6 * drag.omega + 0.4 * (dth / dt) * speed;
+  drag.lastTh = th; drag.lastT = now;
+  s[2] = th; s[3] = 0; s[1] = 0;
+}
+cv.addEventListener("pointermove", e => { if (drag) dragTo(...ptr(e)); });
+function endDrag() {
+  if (drag) {
+    const fresh = performance.now() - drag.lastT < 80;
+    s[3] = fresh ? Math.max(-20, Math.min(20, drag.omega)) : 0;
+    drag = null; uprightSince = null;
+    cv.classList.remove("grabbing");
+  }
+  pressSide = 0;
+}
+cv.addEventListener("pointerup", endDrag);
+cv.addEventListener("pointercancel", endDrag);
+
+// ---------------- simulation ----------------
+function controlStep() {
+  if (drag) {   // held by the user: frozen, but time passes
+    lastU = 0; force = 0; aiForce = 0;
+    simTime += P.CTRL_DT;
+    return;
+  }
+  let u = 0;
+  if (mode === "ai" && policy) {
+    PD.observe(s, lastU, obs);
+    u = policy.act(obs);
+    aiForce = u * P.MAX_FORCE;
+  } else if (mode === "manual") {
+    u = (keyR || pressSide > 0 ? 1 : 0) - (keyL || pressSide < 0 ? 1 : 0);
+    aiForce = 0;
+  } else aiForce = 0;
+  let F = u * P.MAX_FORCE;
+  // arrow keys shove the cart in AI / off modes (a disturbance on top of the motor)
+  if (mode !== "manual") F += ((keyR ? 1 : 0) - (keyL ? 1 : 0)) * 25;
+  if (shoveLeft > 0) { F += shove; shoveLeft--; }
+  force = F;
+
+  for (let i = 0; i < P.SUBSTEPS; i++) {
+    PD.rk4(s, F, params, P.PHYS_DT);
+    endStops();
+  }
+  s[2] = PD.wrap(s[2]);
+  rewardNow = PD.reward(s, u);
+  lastU = u;
+  simTime += P.CTRL_DT;
+
+  const up = Math.abs(s[2]) < 0.1745 && Math.abs(s[3]) < 3;
+  if (up && uprightSince === null) uprightSince = simTime;
+  if (!up) uprightSince = null;
+
+  trace.push({ th: s[2], x: s[0], f: F });
+  if (trace.length > TRACE_N) trace.shift();
+}
+
+// Hard rubber stops at the rail ends. The cart's velocity jumps, and the pole
+// gets the matching angular impulse: dθ' = -3 cosθ Δv / (4 l) for a uniform rod.
+function endStops() {
+  const lim = P.RAIL_HALF;
+  if ((s[0] > lim && s[1] > 0) || (s[0] < -lim && s[1] < 0)) {
+    const v0 = s[1], v1 = -0.25 * v0, dv = v1 - v0;
+    s[0] = Math.sign(s[0]) * lim;
+    s[1] = v1;
+    s[3] += -3 * Math.cos(s[2]) * dv / (4 * params.l);
+    if (Math.abs(dv) > 0.3) bumpFlash = 1;
+  }
+}
+
+// ---------------- drawing ----------------
+function draw() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  // grid
+  ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+  for (let gx = -3; gx <= 3; gx += 0.5) { const [x] = toPx(gx, 0); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let gy = -2; gy <= 2; gy += 0.5) { const [, y] = toPx(0, gy); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  // upright target line
+  const [, yTop] = toPx(0, 0.06 + params.l * 2);
+  ctx.setLineDash([3, 5]); ctx.strokeStyle = "#ffffff14";
+  ctx.beginPath(); ctx.moveTo(0, yTop); ctx.lineTo(W, yTop); ctx.stroke(); ctx.setLineDash([]);
+
+  // rail
+  const [rl, ry] = toPx(-P.RAIL_HALF - 0.25, 0), [rr] = toPx(P.RAIL_HALF + 0.25, 0);
+  const railY = ry + 0.11 * scale;
+  ctx.fillStyle = "#1a2433"; ctx.fillRect(rl, railY - 3, rr - rl, 6);
+  ctx.fillStyle = "#2a3850"; ctx.fillRect(rl, railY - 3, rr - rl, 1.5);
+  // tick marks every 0.5 m
+  ctx.fillStyle = C.faint; ctx.font = `10px ${css("--mono")}`; ctx.textAlign = "center";
+  for (let m = -2; m <= 2; m += 0.5) {
+    const [tx] = toPx(m, 0);
+    ctx.fillRect(tx - 0.5, railY + 5, 1, Number.isInteger(m) ? 7 : 4);
+    if (Number.isInteger(m)) ctx.fillText(m + " m", tx, railY + 24);
+  }
+  // end stops
+  for (const side of [-1, 1]) {
+    const [sx] = toPx(side * (P.RAIL_HALF + 0.12 + 0.22), 0);
+    const w = 0.07 * scale, h = 0.3 * scale;
+    ctx.fillStyle = bumpFlash > 0 && Math.sign(s[0]) === side ? C.danger : "#3b4a62";
+    ctx.fillRect(sx - w / 2, railY - h, w, h + 3);
+  }
+
+  // trail of the pole tip
+  trail.push(tipWorld());
+  if (trail.length > 70) trail.shift();
+  ctx.lineCap = "round";
+  for (let i = 1; i < trail.length; i++) {
+    const a = toPx(...trail[i - 1]), b = toPx(...trail[i]);
+    ctx.strokeStyle = `rgba(244,179,80,${(i / trail.length) * 0.35})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+  }
+
+  // cart
+  const cw = 0.48 * scale, ch = 0.17 * scale;
+  const [cx, cy] = toPx(s[0], 0);
+  const top = cy - ch / 2 + 0.02 * scale;
+  ctx.fillStyle = "#0f2a2c"; ctx.strokeStyle = C.cart; ctx.lineWidth = 2;
+  roundRect(cx - cw / 2, top, cw, ch, 6); ctx.fill(); ctx.stroke();
+  // wheels (rotate with travel)
+  const wr = 0.05 * scale;
+  for (const dx of [-0.15, 0.15]) {
+    const wx = cx + dx * scale, wy = railY - wr - 3;
+    ctx.fillStyle = "#06080d"; ctx.strokeStyle = C.cart; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(wx, wy, wr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    const ang = s[0] / 0.05;
+    ctx.beginPath(); ctx.moveTo(wx, wy); ctx.lineTo(wx + wr * Math.cos(ang), wy + wr * Math.sin(ang)); ctx.stroke();
+  }
+
+  // force arrow
+  if (Math.abs(force) > 0.2) {
+    const len = (force / P.MAX_FORCE) * 0.45 * scale;
+    const ay = top + ch / 2, ax0 = cx + Math.sign(force) * cw / 2 + Math.sign(force) * 6;
+    ctx.strokeStyle = C.force; ctx.fillStyle = C.force; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(ax0, ay); ctx.lineTo(ax0 + len, ay); ctx.stroke();
+    const hx = ax0 + len, dir = Math.sign(force);
+    ctx.beginPath(); ctx.moveTo(hx + dir * 8, ay); ctx.lineTo(hx - dir * 2, ay - 6); ctx.lineTo(hx - dir * 2, ay + 6); ctx.fill();
+  }
+
+  // pole
+  const [px, py] = pivotPx();
+  const [tx, ty] = toPx(...tipWorld());
+  ctx.strokeStyle = drag ? "#ffd38a" : C.pole; ctx.lineWidth = Math.max(4, 0.035 * scale);
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, ty); ctx.stroke();
+  // mass shown at the rod's tip only as a cap; the rod is uniform
+  ctx.fillStyle = C.pole;
+  ctx.beginPath(); ctx.arc(tx, ty, Math.max(5, 0.03 * scale + params.mp * 0.05 * scale), 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(px, py, 4.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#06080d"; ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.fill();
+
+  // angle arc
+  if (Math.abs(s[2]) > 0.02) {
+    ctx.strokeStyle = "#f4b35055"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(px, py, 0.22 * scale, -Math.PI / 2, -Math.PI / 2 + s[2], s[2] < 0); ctx.stroke();
+  }
+  bumpFlash = Math.max(0, bumpFlash - 0.04);
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+// strip chart
+const tc = $("trace"), tctx = tc.getContext("2d");
+function drawTrace() {
+  const r = tc.getBoundingClientRect();
+  if (tc.width !== Math.round(r.width * DPR)) { tc.width = Math.round(r.width * DPR); tc.height = Math.round(r.height * DPR); }
+  const w = r.width, h = r.height;
+  tctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  tctx.clearRect(0, 0, w, h);
+  tctx.strokeStyle = C.grid; tctx.lineWidth = 1;
+  tctx.beginPath(); tctx.moveTo(0, h / 2); tctx.lineTo(w, h / 2); tctx.stroke();
+  const series = [["f", P.MAX_FORCE * 2, C.force, 1.2], ["x", P.RAIL_HALF, C.cart, 1.6], ["th", Math.PI, C.pole, 1.8]];
+  for (const [k, lim, col, lw] of series) {
+    tctx.strokeStyle = col; tctx.lineWidth = lw; tctx.beginPath();
+    let prev = null;
+    trace.forEach((p, i) => {
+      const x = w - (trace.length - 1 - i) * (w / (TRACE_N - 1));
+      const y = h / 2 - Math.max(-1, Math.min(1, p[k] / lim)) * (h / 2 - 4);
+      if (k === "th" && prev !== null && Math.abs(p.th - prev) > Math.PI) tctx.moveTo(x, y); // wrap
+      else if (i === 0) tctx.moveTo(x, y); else tctx.lineTo(x, y);
+      prev = p.th;
+    });
+    tctx.stroke();
+  }
+}
+
+// hidden neuron activity
+const bc = $("brainCanvas"), bctx = bc.getContext("2d");
+function drawBrain() {
+  const r = bc.getBoundingClientRect();
+  if (bc.width !== Math.round(r.width * DPR)) { bc.width = Math.round(r.width * DPR); bc.height = Math.round(r.height * DPR); }
+  const w = r.width, h = r.height;
+  bctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  bctx.clearRect(0, 0, w, h);
+  if (!policy) return;
+  const acts = policy.activations();
+  const rows = [acts[0], acts[1]];
+  rows.forEach((a, ri) => {
+    const n = a.length, cols = Math.min(n, 32), rowsN = Math.ceil(n / cols);
+    const cell = Math.min((w) / cols, (h / 2 - 4) / rowsN);
+    for (let i = 0; i < n; i++) {
+      const v = mode === "ai" ? a[i] : 0;
+      const cx = (i % cols) * (w / cols) + (w / cols) / 2;
+      const cy = ri * (h / 2) + Math.floor(i / cols) * cell + cell / 2 + 2;
+      bctx.fillStyle = v >= 0 ? `rgba(244,179,80,${0.1 + 0.9 * v})` : `rgba(63,214,198,${0.1 - 0.9 * v})`;
+      bctx.beginPath(); bctx.arc(cx, cy, cell * 0.36, 0, Math.PI * 2); bctx.fill();
+    }
+  });
+}
+
+function setStatus() {
+  let txt, col;
+  const deg = Math.abs(s[2]) * 180 / Math.PI;
+  if (drag) { txt = "Held"; col = C.dim; }
+  else if (bumpFlash > 0.5) { txt = "End stop!"; col = C.danger; }
+  else if (mode === "off") { txt = "Motor off · swinging freely"; col = C.faint; }
+  else if (mode === "manual") { txt = "You are driving"; col = C.force; }
+  else if (!policy) { txt = "Loading brain"; col = C.faint; }
+  else if (deg < 3 && Math.abs(s[3]) < 0.5 && Math.abs(s[1]) < 0.1) { txt = "Balanced"; col = C.good; }
+  else if (deg < 25) { txt = "Balancing"; col = C.good; }
+  else { txt = "Swinging up"; col = C.pole; }
+  $("statusText").textContent = txt;
+  $("statusDot").style.background = col;
+}
+
+function readouts() {
+  const deg = s[2] * 180 / Math.PI;
+  $("roAngle").textContent = (deg >= 0 ? "+" : "") + deg.toFixed(1) + "°";
+  $("roSpin").textContent = (s[3] * 180 / Math.PI).toFixed(0) + "°/s";
+  $("roX").textContent = (s[0] >= 0 ? "+" : "") + s[0].toFixed(2) + " m";
+  $("roF").textContent = force.toFixed(1) + " N";
+  $("roR").textContent = rewardNow.toFixed(3);
+  $("roUp").textContent = uprightSince === null ? "–" : (simTime - uprightSince).toFixed(1) + " s";
+  $("clock").textContent = "t = " + simTime.toFixed(1) + " s" + (speed !== 1 ? "  ·  " + speed + "×" : "");
+}
+
+// ---------------- main loop ----------------
+let acc = 0, lastFrame = performance.now(), frameN = 0;
+function frame(now) {
+  const dt = Math.min(0.1, (now - lastFrame) / 1000);
+  lastFrame = now;
+  acc += dt * speed;
+  let n = 0;
+  while (acc >= P.CTRL_DT && n < 20) { controlStep(); acc -= P.CTRL_DT; n++; }
+  if (n === 20) acc = 0;
+  draw();
+  drawTrace();
+  if ((frameN++ & 1) === 0) { drawBrain(); readouts(); setStatus(); }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---------------- live training (Web Worker) ----------------
+let worker = null, training = false;
+const curve = [];
+function ensureWorker() {
+  if (worker) return;
+  worker = new Worker("trainer.js");
+  worker.onmessage = ev => {
+    const m = ev.data;
+    if (m.type !== "progress") return;
+    const wasLive = liveBrain && brainIdx === snapshots.length;
+    const first = !liveBrain;
+    liveBrain = { steps: m.steps, live: true, policy: PD.makePolicy(m.layers) };
+    if (first || wasLive) selectBrain(snapshots.length);
+    else selectBrain(brainIdx);
+    $("tSteps").textContent = m.steps.toLocaleString();
+    $("tSps").textContent = Math.round(m.sps || 0).toLocaleString();
+    $("tRet").textContent = m.epReturn == null ? "–" : m.epReturn.toFixed(0);
+    if (m.epReturn != null) curve.push([m.steps, m.epReturn]);
+    drawCurve();
+  };
+}
+$("bTrain").onclick = () => {
+  ensureWorker();
+  training = !training;
+  worker.postMessage({ cmd: training ? "start" : "pause" });
+  $("bTrain").textContent = training ? "Pause training" : "Resume training";
+  if (training) setMode("ai");
+};
+$("bTrainReset").onclick = () => {
+  ensureWorker();
+  training = false;
+  $("bTrain").textContent = "Start training";
+  curve.length = 0;
+  worker.postMessage({ cmd: "reset", seed: (Math.random() * 1e9) | 0 });
+};
+const lc = $("liveChart"), lctx = lc.getContext("2d");
+function drawCurve() {
+  const r = lc.getBoundingClientRect();
+  lc.width = Math.round(r.width * DPR); lc.height = Math.round(r.height * DPR);
+  const w = r.width, h = r.height;
+  lctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  lctx.clearRect(0, 0, w, h);
+  lctx.fillStyle = C.faint; lctx.font = `9.5px ${css("--mono")}`;
+  lctx.fillText("score", 6, 12);
+  if (curve.length < 2) return;
+  const maxS = curve[curve.length - 1][0];
+  const lo = Math.min(0, ...curve.map(c => c[1])), hi = Math.max(100, ...curve.map(c => c[1]));
+  lctx.strokeStyle = C.pole; lctx.lineWidth = 1.6; lctx.beginPath();
+  curve.forEach(([st, v], i) => {
+    const x = 4 + (st / maxS) * (w - 8), y = h - 4 - ((v - lo) / (hi - lo)) * (h - 18);
+    i ? lctx.lineTo(x, y) : lctx.moveTo(x, y);
+  });
+  lctx.stroke();
+  lctx.fillText(hi.toFixed(0), w - 30, 12);
+}
+</script>
+</body>
+</html>
