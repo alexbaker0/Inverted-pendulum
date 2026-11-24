@@ -167,6 +167,7 @@
         <span><i style="background:var(--pole)"></i><span id="legTh">Pole angle (±180°)</span></span>
         <span><i style="background:var(--cart)"></i>Cart position (±2.4 m)</span>
         <span><i style="background:var(--force)"></i><span id="legF">Motor force (±15 N)</span></span>
+        <span id="legDist" hidden><i style="background:#8fa3bf"></i><span id="legDistT">Wind</span></span>
         <span style="margin-left:auto;color:var(--ink-faint)">last 10 s</span>
       </div>
       <canvas id="trace"></canvas>
@@ -179,6 +180,7 @@
       <div class="ro"><div class="k">Force</div><div class="v" id="roF">–</div></div>
       <div class="ro"><div class="k">Reward</div><div class="v" id="roR">–</div></div>
       <div class="ro"><div class="k">Upright for</div><div class="v" id="roUp">–</div></div>
+      <div class="ro" id="roDistBox" hidden><div class="k" id="roDistK">Wind</div><div class="v" id="roDist">–</div></div>
     </div>
 
     <div class="wiring">
@@ -220,11 +222,11 @@
     <div class="group">
       <h2>Brain</h2>
       <div class="control">
-        <div class="row"><span>Training so far</span><span id="brainLabel">–</span></div>
+        <div class="row"><span>Trained for</span><span id="brainLabel">–</span></div>
         <input type="range" id="brainSlider" min="0" max="0" step="1" value="0" aria-label="Training checkpoint">
         <div class="ticks"><span>untrained</span><span id="brainMax">fully trained</span></div>
       </div>
-      <p class="note">Drag back to see the same network earlier in training. The wiring diagram under the chart shows whichever brain is selected here.</p>
+      <p class="note">Drag back to see the same network earlier in training. The last two stops are the brain trained in calm air and the same brain after extra training in wind and shaking. Try both in a storm. The wiring diagram under the chart shows whichever brain is selected here.</p>
     </div>
 
     <div class="group">
@@ -237,6 +239,22 @@
         <button class="btn" id="bLeft">◀ Shove</button>
         <button class="btn" id="bRight">Shove ▶</button>
       </div>
+    </div>
+
+    <div class="group">
+      <h2>Disturbances</h2>
+      <div class="seg" id="distSeg" role="group" aria-label="Disturbances">
+        <button data-dist="none" class="on">Calm</button>
+        <button data-dist="wind">Wind</button>
+        <button data-dist="ground">Shake</button>
+        <button data-dist="both">Both</button>
+      </div>
+      <div class="control" style="margin-top:12px">
+        <div class="row"><span>Strength</span><span id="vDist">0.5×</span></div>
+        <input type="range" id="sDist" min="0.1" max="2" step="0.1" value="0.5" aria-label="Disturbance strength">
+        <div class="ticks"><span>gentle</span><span>trained up to 1.2×</span><span>storm</span></div>
+      </div>
+      <p class="note" id="distNote">Gusty wind blows on the pole, or the rail shakes like an earthquake. The AI is never told about either: it only feels them through how the pole moves, and must keep working to stay up.</p>
     </div>
 
     <div class="group">
@@ -292,6 +310,7 @@
       <p><b>The agent</b> sees six numbers: cart position and speed, the pole angle (as sine and cosine), its spin, and the force it applied last time. It outputs one number, the motor force. That is a 6→64→64→1 network with tanh units.</p>
       <p><b>The reward</b>, each 1/50 s, is between 0 and 1. It is 1 only when the pole is upright, the cart is in the middle of the rail, nothing is moving and the motor is idle. Hitting an end stop costs 20 and ends the episode.</p>
       <p><b>Training</b> used PPO for 36 million steps, about 8 simulated days, starting from random angles, spins and positions. The physics was jittered and the cart was shoved at random, so the agent copes with a world it has not seen.</p>
+      <p><b>Disturbances.</b> Wind is a gusty sideways load spread along the pole, wandering around a mean that shifts every few seconds. In a steady breeze the only way to stay put is to lean into the wind while the motor pushes back. The shake moves the whole rail side to side, a mix of four slow random rhythms with a peak of 0.4 g. The AI's inputs never include either: it has to infer them from how the pole moves. Both brains were fine-tuned with a random mix of calm, wind, shake and both, so they still go perfectly still when it's calm.</p>
       <p><b>The double pendulum</b> has two 0.6 m rods hinged end to end, with friction at both joints and a 25 N motor. Its equations come from the Lagrangian of the cart and both rods. With one motor and two joints it is chaotic and underactuated. The agent sees nine numbers: both angles as sine and cosine, both spins, plus the cart and its last push. It uses a bigger 9→128→128→1 network, trained the same way for 150 million steps (about 35 simulated days). Swing-up only clicked after about 39 million steps.</p>
     </details>
   </aside>
@@ -320,6 +339,10 @@ const SYS = {
 };
 let sysName = "single", sys = SYS.single, s = sys.s, params = sys.params, I = sys.I;
 const makePolicy = window.Pendulum.makePolicy;
+// wind (N per metre of rod) and rail-shake (peak m/s^2) at strength 1, as in training
+const DIST_SCALE = { single: [1.0, 4.0], double: [0.8, 3.0] };
+let dist = window.Pendulum.makeDisturbance(...DIST_SCALE.single), distMode = "none";
+let windNow = 0, agNow = 0, gOff = 0, gOffBase = 0;
 function th(k) { return s[I.th[k]]; }
 function worstAngle() { return Math.max(...I.th.map(i => Math.abs(s[i]))); }
 
@@ -361,7 +384,7 @@ function selectBrain(i) {
   policy = b ? b.policy : null;
   $("brainSlider").max = list.length - 1;
   $("brainSlider").value = brainIdx;
-  $("brainLabel").textContent = b ? (b.live ? "LIVE · " + fmtSteps(b.steps) : fmtSteps(b.steps)) : "–";
+  $("brainLabel").textContent = b ? (b.live ? "LIVE · " + fmtSteps(b.steps) : fmtSteps(b.steps) + (b.label ? " · " + b.label : "")) : "–";
   $("brainMax").textContent = liveBrain && sysName === "single" ? "your live brain" : "fully trained";
 }
 $("brainSlider").addEventListener("input", e => selectBrain(+e.target.value));
@@ -370,7 +393,7 @@ function loadBrains(name) {
   const target = SYS[name];
   if (target.snapshots) return Promise.resolve();
   return fetch(target.file).then(r => r.json()).then(w => {
-    target.snapshots = w.snapshots.map(sn => ({ steps: sn.steps, policy: makePolicy(sn.layers) }));
+    target.snapshots = w.snapshots.map(sn => ({ steps: sn.steps, label: sn.label, policy: makePolicy(sn.layers) }));
   });
 }
 
@@ -378,6 +401,10 @@ function setSystem(name) {
   sysName = name; sys = SYS[name];
   PD = sys.PD; P = PD.P; s = sys.s; params = sys.params; I = sys.I;
   obs = new Float32Array(P.OBS_DIM); dispObs = new Float32Array(P.OBS_DIM);
+  const old = dist;
+  dist = window.Pendulum.makeDisturbance(...DIST_SCALE[name]);
+  dist.wind = old.wind; dist.ground = old.ground; dist.strength = old.strength; dist.reset();
+  gOffBase = dist.disp(simTime);
   document.querySelectorAll("#sysSeg button").forEach(b => b.classList.toggle("on", b.dataset.sys === name));
   document.body.dataset.sys = name;
   $("subLine").firstChild.textContent = `PPO agent · ${P.MAX_FORCE} N motor · 4.8 m rail · 50 Hz control · `;
@@ -428,6 +455,23 @@ document.querySelectorAll("#speedSeg button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#speedSeg button").forEach(x => x.classList.toggle("on", x === b));
 });
 $("bRandom").onclick = randomStart;
+
+function setDist(m) {
+  distMode = m;
+  dist.wind = m === "wind" || m === "both";
+  dist.ground = m === "ground" || m === "both";
+  document.querySelectorAll("#distSeg button").forEach(b => b.classList.toggle("on", b.dataset.dist === m));
+  gOffBase = dist.disp(simTime);          // the rail starts shaking from where it is
+  $("legDist").hidden = $("roDistBox").hidden = m === "none";
+  $("legDistT").textContent = m === "ground" ? "Rail shake" : m === "both" ? "Wind (rail shake moves the rail)" : "Wind";
+  $("roDistK").textContent = m === "ground" ? "Rail shake" : "Wind";
+}
+document.querySelectorAll("#distSeg button").forEach(b => b.onclick = () => setDist(b.dataset.dist));
+$("sDist").addEventListener("input", e => {
+  dist.strength = +e.target.value;
+  $("vDist").textContent = dist.strength.toFixed(1) + "×";
+  gOffBase = dist.disp(simTime);
+});
 $("bDown").onclick = () => setState(0, 0, perLink(() => Math.PI + rnd(-0.01, 0.01)), perLink(() => 0));
 $("bUp").onclick = () => setState(0, 0, perLink(() => rnd(-0.2, 0.2) / I.th.length), perLink(() => rnd(-0.5, 0.5)));
 $("bSpin").onclick = () => { const dir = Math.random() < 0.5 ? -1 : 1;
@@ -475,7 +519,10 @@ function resize() {
 }
 new ResizeObserver(resize).observe(cv);
 resize();
-const toPx = (x, y) => [ox + x * scale, oy - y * scale];
+// Everything riding on the rail is drawn shifted by the rail's shake offset gOff;
+// the background grid and the ground are drawn with toPxFixed.
+const toPx = (x, y) => [ox + (x + gOff) * scale, oy - y * scale];
+const toPxFixed = (x, y) => [ox + x * scale, oy - y * scale];
 
 function pivotPx() { return toPx(s[0], 0.06); }
 // world positions of the pivot, each joint and the tip
@@ -561,8 +608,10 @@ function controlStep() {
   if (shoveLeft > 0) { F += shove; shoveLeft--; }
   force = F;
 
+  windNow = dist.stepWind(P.CTRL_DT);
   for (let i = 0; i < P.SUBSTEPS; i++) {
-    PD.rk4(s, F, params, P.PHYS_DT);
+    agNow = dist.acc(simTime + i * P.PHYS_DT);
+    PD.rk4(s, F, params, P.PHYS_DT, windNow, agNow);
     endStops();
   }
   I.th.forEach(i => s[i] = PD.wrap(s[i]));
@@ -574,7 +623,8 @@ function controlStep() {
   if (up && uprightSince === null) uprightSince = simTime;
   if (!up) uprightSince = null;
 
-  trace.push({ th: th(0), th2: I.th.length > 1 ? th(1) : null, x: s[0], f: F });
+  trace.push({ th: th(0), th2: I.th.length > 1 ? th(1) : null, x: s[0], f: F,
+               d: distMode === "none" ? null : dist.wind ? windNow / dist.windScale : agNow / dist.groundScale });
   if (trace.length > TRACE_N) trace.shift();
 }
 
@@ -606,10 +656,14 @@ function draw() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
 
-  // grid
+  gOff = dist.ground ? dist.disp(simTime) - gOffBase : 0;
+
+  // grid (fixed to the ground)
   ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
-  for (let gx = -3; gx <= 3; gx += 0.5) { const [x] = toPx(gx, 0); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-  for (let gy = -2; gy <= 2; gy += 0.5) { const [, y] = toPx(0, gy); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  for (let gx = -3; gx <= 3; gx += 0.5) { const [x] = toPxFixed(gx, 0); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let gy = -2; gy <= 2; gy += 0.5) { const [, y] = toPxFixed(0, gy); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  drawWind();
 
   // upright target line
   const [, yTop] = toPx(0, 0.06 + sys.links(params).reduce((a, b) => a + b, 0));
@@ -619,6 +673,15 @@ function draw() {
   // rail
   const [rl, ry] = toPx(-P.RAIL_HALF - 0.25, 0), [rr] = toPx(P.RAIL_HALF + 0.25, 0);
   const railY = ry + 0.11 * scale;
+  if (dist.ground) {   // the fixed ground the rail is shaking on, with rollers
+    const gy = railY + 30;
+    ctx.fillStyle = "#121a26"; ctx.fillRect(0, gy, W, 3);
+    ctx.strokeStyle = "#1e2a3b"; ctx.lineWidth = 1;
+    for (let gx = -3.2; gx <= 3.2; gx += 0.2) {
+      const [x] = toPxFixed(gx, 0);
+      ctx.beginPath(); ctx.moveTo(x, gy + 3); ctx.lineTo(x - 7, gy + 11); ctx.stroke();
+    }
+  }
   ctx.fillStyle = "#1a2433"; ctx.fillRect(rl, railY - 3, rr - rl, 6);
   ctx.fillStyle = "#2a3850"; ctx.fillRect(rl, railY - 3, rr - rl, 1.5);
   // tick marks every 0.5 m
@@ -697,6 +760,29 @@ function draw() {
   }
   bumpFlash = Math.max(0, bumpFlash - 0.04);
 }
+
+// Wind: streaks drifting across the stage at a speed and density set by the wind.
+const streaks = Array.from({ length: 70 }, () => ({ x: Math.random() * 7 - 3.5, y: Math.random() * 3.6 - 1.7, k: Math.random() }));
+let lastWindDraw = performance.now();
+function drawWind() {
+  const now = performance.now(), dt = Math.min(0.05, (now - lastWindDraw) / 1000) * speed;
+  lastWindDraw = now;
+  if (!dist.wind) return;
+  const rel = windNow / dist.windScale;                 // ~ -2.5 .. 2.5
+  const v = rel * 2.2;                                  // drawn speed, m/s
+  ctx.lineCap = "round";
+  for (const st of streaks) {
+    st.x += v * (0.6 + 0.8 * st.k) * dt;
+    if (st.x > 3.5) { st.x -= 7; st.y = Math.random() * 3.6 - 1.7; }
+    if (st.x < -3.5) { st.x += 7; st.y = Math.random() * 3.6 - 1.7; }
+    if (st.k > Math.min(1, Math.abs(rel) * 0.8 + 0.15)) continue;   // calmer wind, fewer streaks
+    const [x, y] = toPxFixed(st.x, st.y);
+    const len = (8 + 26 * Math.min(1.5, Math.abs(rel))) * Math.sign(v || 1);
+    ctx.strokeStyle = `rgba(160,180,210,${0.08 + 0.22 * Math.min(1, Math.abs(rel))})`;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(x - len, y); ctx.lineTo(x, y); ctx.stroke();
+  }
+}
 function roundRect(x, y, w, h, r) {
   ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
   ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
@@ -714,6 +800,7 @@ function drawTrace() {
   tctx.beginPath(); tctx.moveTo(0, h / 2); tctx.lineTo(w, h / 2); tctx.stroke();
   const series = [["f", P.MAX_FORCE * 2, C.force, 1.2], ["x", P.RAIL_HALF, C.cart, 1.6], ["th", Math.PI, C.pole, 1.8]];
   if (sysName === "double") series.push(["th2", Math.PI, "#ffd27a", 1.2]);
+  if (distMode !== "none") series.unshift(["d", 2.5, "#8fa3bf", 1]);
   for (const [k, lim, col, lw] of series) {
     tctx.strokeStyle = col; tctx.lineWidth = lw; tctx.beginPath();
     let prev = null;
@@ -962,6 +1049,12 @@ function readouts() {
   $("roF").textContent = force.toFixed(1) + " N";
   $("roR").textContent = rewardNow.toFixed(3);
   $("roUp").textContent = uprightSince === null ? "–" : (simTime - uprightSince).toFixed(1) + " s";
+  if (distMode !== "none") {
+    if (dist.wind) {
+      const L = sys.links(params).reduce((a, b) => a + b, 0);
+      $("roDist").textContent = (windNow >= 0 ? "→ " : "← ") + Math.abs(windNow * L).toFixed(1) + " N";
+    } else $("roDist").textContent = (agNow >= 0 ? "+" : "−") + Math.abs(agNow).toFixed(1) + " m/s²";
+  }
   $("clock").textContent = "t = " + simTime.toFixed(1) + " s" + (speed !== 1 ? "  ·  " + speed + "×" : "");
 }
 

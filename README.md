@@ -17,6 +17,7 @@ On the page you can:
 - see the whole network wired up: every neuron and all 4,544 connections, with live signals, and hover to trace any neuron
 - change the pole length, the masses and the friction beyond what it was trained on
 - train a brand-new network from scratch in your browser and watch it learn
+- turn on gusty **wind** or a **shaking rail** (or both) so the agent has to keep working
 
 ## The world
 
@@ -99,6 +100,81 @@ friction x3                      99.2%     0.8%     2.22s   7.8s  0.000° 0.004m
 - It is much less forgiving than the single. It handles triple friction and a double-weight pole, but a pole 30% longer or shorter, or a heavy cart, mostly defeats it. The training jitter was kept small (±8% lengths) so that it could learn swing-up at all.
 - On the page an end stop doesn't end the run, so the ~1% of starts that hit one usually recover.
 
+## Wind and ground shake
+
+Optional disturbances, added in `training/disturb.py` (Python) and `physics.js` (browser):
+
+- **Wind**: a sideways load in N per metre of rod, spread along every rod. It follows a gusty
+  random process (1.5 s correlation) around a mean that shifts every ~8 s. In a steady breeze
+  the only way to stay put is to lean into the wind while the motor pushes back.
+- **Ground shake**: the whole rail moves sideways, as the sum of four random sine waves
+  between 0.3 and 1.5 Hz with a peak of 4 m/s² (3 m/s² for the double) at strength 1. In the
+  rail's frame every body feels a pseudo-force −m·a.
+
+Both enter the equations of motion as generalised forces. With friction off, a constant wind
+or a constant rail acceleration conserves energy plus the potential of that force, to 7
+decimal places. The JS and Python simulations still agree to about 10⁻⁶ with both switched
+on.
+
+The agent's inputs **never include** the wind or the shake: it has to sense them through
+the pole's motion. Each brain was fine-tuned from its calm-trained version with a random
+mix per episode (25% calm, 35% wind, 25% shake, 15% both, strength 0.2–1.2×). That was
+25M more steps for the single and 40M for the double. The page keeps both versions on the
+Brain slider ("calm" and "wind & shake") so you can compare them.
+
+**Single, wind & shake brain** (256 random starts per row; "stays up" = within 30° for the
+final 5 s; angle, drift and force are averages over that window):
+
+```
+case                          stays up within 5°  crashed  swing-up  worst   angle  drift  force
+nominal                         100.0%    100.0%     0.0%     1.28s   5.2s  0.000° 0.032m  0.00N
+nominal + random shoves          92.6%     66.0%     0.0%     1.30s   5.2s  2.101° 0.041m  0.64N
+wind, strength 0.5              100.0%      0.4%     0.0%     1.37s   7.9s  9.089° 0.303m  1.79N
+ground shake, strength 0.5      100.0%      3.5%     0.0%     1.31s   5.1s  4.533° 0.082m  2.02N
+wind + shake, strength 0.5       99.2%      0.0%     0.0%     1.39s   6.7s  9.944° 0.309m  2.71N
+wind, strength 1                 57.8%      0.0%     0.0%     1.31s  10.0s 13.538° 0.440m  3.55N
+ground shake, strength 1        100.0%      0.4%     0.0%     1.27s   5.0s  9.112° 0.162m  4.29N
+wind + shake, strength 1         26.6%      0.0%     0.0%     1.29s   9.2s 13.781° 0.398m  5.41N
+wind + shake, strength 1.5        1.6%      0.0%     0.0%     1.30s  11.7s 13.107° 0.308m  5.68N
+pole 30% longer                  52.3%      0.0%     0.0%     1.21s   6.7s 15.353° 0.308m 11.51N
+pole 30% shorter                100.0%    100.0%     0.0%     1.18s   3.7s  0.000° 0.032m  0.00N
+pole twice as heavy             100.0%    100.0%     0.0%     1.24s   4.6s  0.000° 0.032m  0.00N
+cart twice as heavy              87.1%     84.8%     0.0%     1.57s   5.8s  0.443° 0.032m  0.04N
+friction x3                     100.0%    100.0%     0.0%     1.28s   4.9s  0.000° 0.032m  0.00N
+```
+
+**Double, wind & shake brain:**
+
+```
+case                          stays up within 5°  crashed  swing-up  worst   angle  drift  force
+nominal                          99.2%     99.2%     0.8%     2.35s   7.0s  0.000° 0.053m  0.00N
+nominal + random shoves          97.7%     84.0%     0.8%     2.35s   6.7s  0.841° 0.053m  0.39N
+wind, strength 0.5               99.6%      2.0%     0.4%     2.32s   8.5s  5.102° 0.248m  1.02N
+ground shake, strength 0.5       99.6%      4.7%     0.4%     2.42s   7.5s  4.817° 0.118m  2.17N
+wind + shake, strength 0.5       99.2%      0.0%     0.8%     2.39s   7.3s  7.015° 0.277m  2.36N
+wind, strength 1                 98.4%      0.0%     0.8%     2.45s  10.5s  9.912° 0.484m  2.04N
+ground shake, strength 1         99.2%      0.0%     0.4%     2.38s   7.3s  9.050° 0.218m  4.35N
+wind + shake, strength 1         64.1%      0.0%     2.3%     2.54s   9.9s 12.129° 0.489m  4.77N
+wind + shake, strength 1.5        4.7%      0.0%    15.6%     2.80s  17.3s 13.596° 0.556m  5.57N
+pole 30% longer                   3.9%      0.0%     1.6%     0.22s   3.7s  7.527° 0.149m  4.23N
+pole 30% shorter                  1.2%      1.2%     3.9%     1.10s  17.7s  0.000° 0.053m  0.00N
+pole twice as heavy              74.6%     74.2%     0.4%     2.80s  14.4s  0.133° 0.053m  0.00N
+cart twice as heavy               2.7%      2.3%    14.8%     3.88s  18.1s  0.796° 0.054m  0.54N
+friction x3                      99.6%     99.6%     0.4%     2.34s   6.0s  0.000° 0.053m  0.00N
+```
+
+What changed compared with the calm-trained brains:
+
+- **Wind no longer blows it off the rail.** Single at 0.5×: crashes 23% → 0%. Double at 1×:
+  crashes 20% → 1%, and it stays up 73% → 98% of the time.
+- **It costs a little calm precision.** The cart rests 3–5 cm off-centre instead of 1 cm or
+  less, and the slowest swing-ups take longer.
+- **It tolerates changed physics less well.** For example, the single now struggles with a
+  pole 30% longer. The agent can't tell wind from shake from a heavier pole, so one reflex
+  has to serve them all. Giving it a short memory of recent inputs is the obvious next step.
+- At full strength, wind gusts approach the pole's own weight. Resisting them needs a lean of
+  more than 30°, so "stays up" there is limited by physics as well as by the brain.
+
 ## Files
 
 ```
@@ -109,6 +185,7 @@ weights.json          trained single-pendulum policy at 8 points during training
 weights_double.json   trained double-pendulum policy at 8 points during training
 training/env.py       vectorised numpy world (single)
 training/env_double.py  vectorised numpy world (double)
+training/disturb.py   wind and rail-shake generator shared by both worlds
 training/train.py     PPO (PyTorch)
 training/evaluate.py  stress tests from random starts, including changed physics
 training/parity_test.py  checks that the JS and Python simulations match
@@ -132,4 +209,11 @@ python train.py --system double --steps 1.5e8 --envs 256 --minibatch 8192 --gamm
 python evaluate.py runs/double/ckpt.pt --system double
 cp runs/double/weights.json ../weights_double.json
 python parity_test.py --system double
+
+# wind & shake fine-tunes
+python train.py --disturb --init runs/finetune/ckpt.pt --init-std 0.2 --steps 2.5e7 --lr 2e-4 \
+                --snapshots 1.0 --step-offset 3.6e7 --out runs/disturb
+python train.py --system double --disturb --init runs/double/ckpt.pt --init-std 0.15 --steps 4e7 \
+                --lr 1.5e-4 --envs 256 --minibatch 8192 --gamma 0.995 --snapshots 1.0 \
+                --step-offset 1.5e8 --out runs/double_disturb
 ```

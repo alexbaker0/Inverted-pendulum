@@ -123,6 +123,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--system", choices=list(SYSTEMS), default="single")
     ap.add_argument("--steps", type=float, default=2e7)
+    ap.add_argument("--disturb", action="store_true",
+                    help="train with random wind and ground shake (see disturb.py)")
     ap.add_argument("--envs", type=int, default=128)
     ap.add_argument("--horizon", type=int, default=256)
     ap.add_argument("--gamma", type=float, default=0.99)
@@ -135,6 +137,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="runs/main")
     ap.add_argument("--init", default=None, help="checkpoint to continue from (fine-tuning)")
+    ap.add_argument("--init-std", type=float, default=None,
+                    help="when fine-tuning, reset the exploration noise to this std")
     ap.add_argument("--step-offset", type=float, default=0,
                     help="add to the step counts recorded in snapshots (for fine-tuning runs)")
     ap.add_argument("--snapshots", default="0,0.01,0.03,0.08,0.2,0.5,1.0",
@@ -147,12 +151,15 @@ def main():
 
     mod, env_cls, ph, ch = SYSTEMS[args.system]
     OBS_DIM = mod.OBS_DIM
-    env = env_cls(args.envs, seed=args.seed)
+    env = env_cls(args.envs, seed=args.seed, disturb=args.disturb)
     policy, critic = Policy(ph, OBS_DIM), Critic(ch, OBS_DIM)
     if args.init:
         ck = torch.load(args.init)
         policy.load_state_dict(ck["policy"])
         critic.load_state_dict(ck["critic"])
+        if args.init_std:
+            with torch.no_grad():
+                policy.log_std.fill_(float(np.log(args.init_std)))
     opt = torch.optim.Adam(list(policy.parameters()) + list(critic.parameters()),
                            lr=args.lr, eps=1e-5)
 

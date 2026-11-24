@@ -21,6 +21,11 @@ Physics
 
 import numpy as np
 
+from disturb import DisturbanceVec
+
+WIND_SCALE = 1.0         # N per metre of pole at strength 1
+GROUND_SCALE = 4.0       # m/s^2 peak rail acceleration at strength 1
+
 # ---- physical constants (nominal) -------------------------------------------
 G = 9.81
 CART_MASS = 1.0          # kg
@@ -40,24 +45,30 @@ OBS_DIM = 6
 ACT_DIM = 1
 
 
-def derivs(s, force, p):
-    """Time derivative of state s=[x, xd, th, thd] (each shape (N,))."""
+def derivs(s, force, p, w=0.0, ag=0.0):
+    """Time derivative of state s=[x, xd, th, thd] (each shape (N,)).
+
+    w: wind load on the pole, N per metre (+ right). ag: rail acceleration.
+    """
     x, xd, th, thd = s
     mc, mp, l, bc, bp = p  # l is HALF length (pivot to centre of mass)
     total = mc + mp
     sin, cos = np.sin(th), np.cos(th)
-    tmp = (force + mp * l * thd * thd * sin - bc * xd) / total
-    thdd = (G * sin - cos * tmp - bp * thd / (mp * l)) / (
+    fw = w * 2 * l                                    # total wind force on the rod
+    qx = fw - total * ag                              # generalised force on x
+    qth = (fw - mp * ag) * l * cos                    # ... and on theta
+    tmp = (force + qx + mp * l * thd * thd * sin - bc * xd) / total
+    thdd = (G * sin + qth / (mp * l) - cos * tmp - bp * thd / (mp * l)) / (
         l * (4.0 / 3.0 - mp * cos * cos / total))
     xdd = tmp - mp * l * thdd * cos / total
     return np.stack([xd, xdd, thd, thdd])
 
 
-def rk4(s, force, p, dt):
-    k1 = derivs(s, force, p)
-    k2 = derivs(s + 0.5 * dt * k1, force, p)
-    k3 = derivs(s + 0.5 * dt * k2, force, p)
-    k4 = derivs(s + dt * k3, force, p)
+def rk4(s, force, p, dt, w=0.0, ag=0.0):
+    k1 = derivs(s, force, p, w, ag)
+    k2 = derivs(s + 0.5 * dt * k1, force, p, w, ag)
+    k3 = derivs(s + 0.5 * dt * k2, force, p, w, ag)
+    k4 = derivs(s + dt * k3, force, p, w, ag)
     return s + dt / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
@@ -95,9 +106,10 @@ def reward(s, u):
 class CartPoleVec:
     """N copies of the world. Actions are in [-1, 1] (fraction of MAX_FORCE)."""
 
-    def __init__(self, n, seed=0, randomise=True, pushes=True):
+    def __init__(self, n, seed=0, randomise=True, pushes=True, disturb=False):
         self.n = n
         self.rng = np.random.default_rng(seed)
+        self.dist = DisturbanceVec(n, self.rng, WIND_SCALE, GROUND_SCALE, enabled=disturb)
         self.randomise = randomise
         self.pushes = pushes
         self.s = np.zeros((4, n))
@@ -145,6 +157,7 @@ class CartPoleVec:
             return
         self._sample_params(idx)
         self._sample_state(idx)
+        self.dist.reset_idx(idx)
         self.t[idx] = 0
         self.last_u[idx] = 0
         self.push_left[idx] = 0
@@ -172,8 +185,11 @@ class CartPoleVec:
             force = force + np.where(self.push_left > 0, self.push_force, 0.0)
             self.push_left = np.maximum(self.push_left - 1, 0)
 
-        for _ in range(SUBSTEPS):
-            self.s = rk4(self.s, force, self.p, PHYS_DT)
+        w = self.dist.step_wind(CTRL_DT)
+        t0 = self.t * CTRL_DT
+        for k in range(SUBSTEPS):
+            ag = self.dist.ground_acc(t0 + k * PHYS_DT)
+            self.s = rk4(self.s, force, self.p, PHYS_DT, w, ag)
         self.s[2] = wrap(self.s[2])
         self.t += 1
 

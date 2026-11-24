@@ -22,6 +22,11 @@ Equations of motion come from the Lagrangian of a cart (mc) carrying rod 1
 
 import numpy as np
 
+from disturb import DisturbanceVec
+
+WIND_SCALE = 0.8         # N per metre of rod at strength 1
+GROUND_SCALE = 3.0       # m/s^2 peak rail acceleration at strength 1
+
 G = 9.81
 CART_MASS = 1.0
 POLE1_MASS = 0.2
@@ -43,7 +48,7 @@ ACT_DIM = 1
 # param rows: mc, m1, m2, L1, L2, bc, bj
 
 
-def derivs(s, force, p):
+def derivs(s, force, p, w=0.0, ag=0.0):
     x, th1, th2, xd, t1d, t2d = s
     mc, m1, m2, L1, L2, bc, bj = p
     l1, l2 = L1 / 2, L2 / 2
@@ -62,9 +67,16 @@ def derivs(s, force, p):
     M23 = c * c12
     M33 = J2
     rel = t2d - t1d
-    f1 = force + a * s1 * t1d * t1d + b * s2 * t2d * t2d - bc * xd
-    f2 = -c * s12 * t2d * t2d + a * G * s1 - bj * t1d + bj * rel
-    f3 = c * s12 * t1d * t1d + b * G * s2 - bj * rel
+    # wind (w N/m along each rod, resultant at its centre) and the rail's
+    # pseudo-force -m*ag on every body, as generalised forces
+    h1 = w * L1 - m1 * ag                       # net sideways load on rod 1's centre
+    h2 = w * L2 - m2 * ag                       # ... and on rod 2's centre
+    q1 = h1 + h2 - mc * ag
+    q2 = (h1 * l1 + h2 * L1) * c1
+    q3 = h2 * l2 * c2
+    f1 = force + q1 + a * s1 * t1d * t1d + b * s2 * t2d * t2d - bc * xd
+    f2 = q2 - c * s12 * t2d * t2d + a * G * s1 - bj * t1d + bj * rel
+    f3 = q3 + c * s12 * t1d * t1d + b * G * s2 - bj * rel
 
     # symmetric 3x3 solve by Cramer's rule (fast, vectorised)
     C11 = M22 * M33 - M23 * M23
@@ -80,11 +92,11 @@ def derivs(s, force, p):
     return np.stack([xd, t1d, t2d, xdd, t1dd, t2dd])
 
 
-def rk4(s, force, p, dt):
-    k1 = derivs(s, force, p)
-    k2 = derivs(s + 0.5 * dt * k1, force, p)
-    k3 = derivs(s + 0.5 * dt * k2, force, p)
-    k4 = derivs(s + dt * k3, force, p)
+def rk4(s, force, p, dt, w=0.0, ag=0.0):
+    k1 = derivs(s, force, p, w, ag)
+    k2 = derivs(s + 0.5 * dt * k1, force, p, w, ag)
+    k3 = derivs(s + 0.5 * dt * k2, force, p, w, ag)
+    k4 = derivs(s + dt * k3, force, p, w, ag)
     return s + dt / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
@@ -129,9 +141,10 @@ def energy(s, p):
 
 
 class DoublePoleVec:
-    def __init__(self, n, seed=0, randomise=True, pushes=True, near_frac=0.3):
+    def __init__(self, n, seed=0, randomise=True, pushes=True, near_frac=0.3, disturb=False):
         self.n = n
         self.rng = np.random.default_rng(seed)
+        self.dist = DisturbanceVec(n, self.rng, WIND_SCALE, GROUND_SCALE, enabled=disturb)
         self.randomise = randomise
         self.pushes = pushes
         self.near_frac = near_frac
@@ -168,6 +181,7 @@ class DoublePoleVec:
             return
         self._sample_params(idx)
         self._sample_state(idx)
+        self.dist.reset_idx(idx)
         self.t[idx] = 0
         self.last_u[idx] = 0
         self.push_left[idx] = 0
@@ -190,8 +204,11 @@ class DoublePoleVec:
                 self.push_left[start] = self.rng.integers(2, 6, k)
             force = force + np.where(self.push_left > 0, self.push_force, 0.0)
             self.push_left = np.maximum(self.push_left - 1, 0)
-        for _ in range(SUBSTEPS):
-            self.s = rk4(self.s, force, self.p, PHYS_DT)
+        w = self.dist.step_wind(CTRL_DT)
+        t0 = self.t * CTRL_DT
+        for k in range(SUBSTEPS):
+            ag = self.dist.ground_acc(t0 + k * PHYS_DT)
+            self.s = rk4(self.s, force, self.p, PHYS_DT, w, ag)
         self.s[1] = wrap(self.s[1])
         self.s[2] = wrap(self.s[2])
         self.t += 1

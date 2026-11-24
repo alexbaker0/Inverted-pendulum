@@ -26,13 +26,17 @@
              bc: P.CART_FRICTION, bp: P.POLE_FRICTION };
   }
 
-  // s = [x, xd, th, thd]; writes derivative into out
-  function derivs(s, F, p, out) {
+  // s = [x, xd, th, thd]; writes derivative into out.
+  // w: wind load on the pole (N per metre, + right); ag: rail acceleration.
+  function derivs(s, F, p, out, w, ag) {
+    w = w || 0; ag = ag || 0;
     const xd = s[1], th = s[2], thd = s[3];
     const total = p.mc + p.mp;
     const sin = Math.sin(th), cos = Math.cos(th);
-    const tmp = (F + p.mp * p.l * thd * thd * sin - p.bc * xd) / total;
-    const thdd = (P.G * sin - cos * tmp - p.bp * thd / (p.mp * p.l)) /
+    const fw = w * 2 * p.l;
+    const qx = fw - total * ag, qth = (fw - p.mp * ag) * p.l * cos;
+    const tmp = (F + qx + p.mp * p.l * thd * thd * sin - p.bc * xd) / total;
+    const thdd = (P.G * sin + qth / (p.mp * p.l) - cos * tmp - p.bp * thd / (p.mp * p.l)) /
                  (p.l * (4 / 3 - p.mp * cos * cos / total));
     out[0] = xd;
     out[1] = tmp - p.mp * p.l * thdd * cos / total;
@@ -43,14 +47,14 @@
   const k1 = new Float64Array(4), k2 = new Float64Array(4),
         k3 = new Float64Array(4), k4 = new Float64Array(4), tmpS = new Float64Array(4);
 
-  function rk4(s, F, p, dt) {
-    derivs(s, F, p, k1);
+  function rk4(s, F, p, dt, w, ag) {
+    derivs(s, F, p, k1, w, ag);
     for (let i = 0; i < 4; i++) tmpS[i] = s[i] + 0.5 * dt * k1[i];
-    derivs(tmpS, F, p, k2);
+    derivs(tmpS, F, p, k2, w, ag);
     for (let i = 0; i < 4; i++) tmpS[i] = s[i] + 0.5 * dt * k2[i];
-    derivs(tmpS, F, p, k3);
+    derivs(tmpS, F, p, k3, w, ag);
     for (let i = 0; i < 4; i++) tmpS[i] = s[i] + dt * k3[i];
-    derivs(tmpS, F, p, k4);
+    derivs(tmpS, F, p, k4, w, ag);
     for (let i = 0; i < 4; i++) s[i] += dt / 6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
   }
 
@@ -82,8 +86,9 @@
   }
 
   // Advance one control period with force F (newtons). Mutates s.
-  function stepControl(s, F, p) {
-    for (let i = 0; i < P.SUBSTEPS; i++) rk4(s, F, p, P.PHYS_DT);
+  // agAt(k): rail acceleration at substep k (optional).
+  function stepControl(s, F, p, w, agAt) {
+    for (let i = 0; i < P.SUBSTEPS; i++) rk4(s, F, p, P.PHYS_DT, w, agAt ? agAt(i) : 0);
     s[2] = wrap(s[2]);
   }
 
@@ -132,7 +137,8 @@
   }
 
   // s = [x, th1, th2, xd, t1d, t2d]
-  function dDerivs(s, F, p, out) {
+  function dDerivs(s, F, p, out, w, ag) {
+    w = w || 0; ag = ag || 0;
     const th1 = s[1], th2 = s[2], xd = s[3], t1d = s[4], t2d = s[5];
     const l1 = p.L1 / 2, l2 = p.L2 / 2;
     const a = p.m1 * l1 + p.m2 * p.L1, b = p.m2 * l2, c = p.m2 * p.L1 * l2;
@@ -142,9 +148,11 @@
     const s12 = Math.sin(th1 - th2), c12 = Math.cos(th1 - th2);
     const M11 = p.mc + p.m1 + p.m2, M12 = a * c1, M13 = b * c2, M22 = J1, M23 = c * c12, M33 = J2;
     const rel = t2d - t1d;
-    const f1 = F + a * s1 * t1d * t1d + b * s2 * t2d * t2d - p.bc * xd;
-    const f2 = -c * s12 * t2d * t2d + a * D.G * s1 - p.bj * t1d + p.bj * rel;
-    const f3 = c * s12 * t1d * t1d + b * D.G * s2 - p.bj * rel;
+    const h1 = w * p.L1 - p.m1 * ag, h2 = w * p.L2 - p.m2 * ag;   // wind + rail pseudo-force
+    const g1 = h1 + h2 - p.mc * ag, g2 = (h1 * l1 + h2 * p.L1) * c1, g3 = h2 * l2 * c2;
+    const f1 = F + g1 + a * s1 * t1d * t1d + b * s2 * t2d * t2d - p.bc * xd;
+    const f2 = g2 - c * s12 * t2d * t2d + a * D.G * s1 - p.bj * t1d + p.bj * rel;
+    const f3 = g3 + c * s12 * t1d * t1d + b * D.G * s2 - p.bj * rel;
     const C11 = M22 * M33 - M23 * M23, C12 = M13 * M23 - M12 * M33, C13 = M12 * M23 - M13 * M22;
     const C22 = M11 * M33 - M13 * M13, C23 = M12 * M13 - M11 * M23, C33 = M11 * M22 - M12 * M12;
     const det = M11 * C11 + M12 * C12 + M13 * C13;
@@ -155,14 +163,14 @@
   }
   const q1 = new Float64Array(6), q2 = new Float64Array(6), q3 = new Float64Array(6),
         q4 = new Float64Array(6), qs = new Float64Array(6);
-  function dRk4(s, F, p, dt) {
-    dDerivs(s, F, p, q1);
+  function dRk4(s, F, p, dt, w, ag) {
+    dDerivs(s, F, p, q1, w, ag);
     for (let i = 0; i < 6; i++) qs[i] = s[i] + 0.5 * dt * q1[i];
-    dDerivs(qs, F, p, q2);
+    dDerivs(qs, F, p, q2, w, ag);
     for (let i = 0; i < 6; i++) qs[i] = s[i] + 0.5 * dt * q2[i];
-    dDerivs(qs, F, p, q3);
+    dDerivs(qs, F, p, q3, w, ag);
     for (let i = 0; i < 6; i++) qs[i] = s[i] + dt * q3[i];
-    dDerivs(qs, F, p, q4);
+    dDerivs(qs, F, p, q4, w, ag);
     for (let i = 0; i < 6; i++) s[i] += dt / 6 * (q1[i] + 2 * q2[i] + 2 * q3[i] + q4[i]);
   }
   function dObserve(s, lastU, out) {
@@ -181,13 +189,59 @@
     const still = 0.5 + 0.5 * Math.exp(-(t1d / 2) * (t1d / 2) - (t2d / 2) * (t2d / 2) - xd * xd);
     return up * up * centred * gentle * still;
   }
-  function dStepControl(s, F, p) {
-    for (let i = 0; i < D.SUBSTEPS; i++) dRk4(s, F, p, D.PHYS_DT);
+  function dStepControl(s, F, p, w, agAt) {
+    for (let i = 0; i < D.SUBSTEPS; i++) dRk4(s, F, p, D.PHYS_DT, w, agAt ? agAt(i) : 0);
     s[1] = wrap(s[1]); s[2] = wrap(s[2]);
   }
 
   root.PendulumDouble = { P: D, nominalParams: dNominal, derivs: dDerivs, rk4: dRk4,
                           observe: dObserve, reward: dReward, stepControl: dStepControl, wrap };
 
-  root.Pendulum = { P, nominalParams, derivs, rk4, wrap, observe, reward, stepControl, makePolicy };
+  // ---------------------------------------------------------------------------
+  // Random wind and ground shake, same statistics as training/disturb.py.
+  // windScale: N per metre at strength 1; groundScale: peak m/s^2 at strength 1.
+  function gauss() {
+    let u = 0; while (u === 0) u = Math.random();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * Math.random());
+  }
+  function makeDisturbance(windScale, groundScale) {
+    const d = { wind: false, ground: false, strength: 0.5, w: 0, wMean: 0,
+                freq: [], amp: [], phase: [], windScale, groundScale };
+    d.reset = function () {
+      const W = windScale * d.strength;
+      d.wMean = (Math.random() * 1.2 - 0.6) * W;
+      d.w = d.wMean + 0.5 * W * gauss();
+      const a = [0, 1, 2, 3].map(() => Math.random()), sum = a.reduce((x, y) => x + y, 0);
+      d.freq = a.map(() => 0.3 + 1.2 * Math.random());
+      d.phase = a.map(() => 2 * Math.PI * Math.random());
+      d.amp = a.map(v => v / sum * groundScale);          // scaled by strength when used
+    };
+    d.stepWind = function (dt) {
+      const W = windScale * d.strength;
+      if (Math.random() < dt / 8) d.wMean = (Math.random() * 1.2 - 0.6) * W;
+      d.w += (d.wMean - d.w) * dt / 1.5 + 0.5 * W * Math.sqrt(2 * dt / 1.5) * gauss();
+      d.w = Math.max(-2.5 * W, Math.min(2.5 * W, d.w));
+      return d.wind ? d.w : 0;
+    };
+    // rail acceleration and displacement at time t
+    d.acc = function (t) {
+      if (!d.ground) return 0;
+      let a = 0;
+      for (let k = 0; k < 4; k++) a -= d.strength * d.amp[k] * Math.sin(2 * Math.PI * d.freq[k] * t + d.phase[k]);
+      return a;
+    };
+    d.disp = function (t) {
+      if (!d.ground) return 0;
+      let g = 0;
+      for (let k = 0; k < 4; k++) {
+        const om = 2 * Math.PI * d.freq[k];
+        g += d.strength * d.amp[k] / (om * om) * Math.sin(om * t + d.phase[k]);
+      }
+      return g;
+    };
+    d.reset();
+    return d;
+  }
+
+  root.Pendulum = { P, nominalParams, derivs, rk4, wrap, observe, reward, stepControl, makePolicy, makeDisturbance };
 })(typeof self !== "undefined" ? self : globalThis);
